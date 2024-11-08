@@ -5,7 +5,12 @@ import {
   TimeoutError,
   AuthenticationError,
   SystemConfig,
-  APIResponse
+  APIResponse,
+  Intent,
+  ScrapingResult,
+  OpenAIResponse,
+  IBackendOpenAIService,
+  IBackendWebScrapingService
 } from '../types/backendInterfaces';
 import BackendOpenAIService from './BackendOpenAIService';
 import BackendWebScrapingService from './BackendWebScrapingService';
@@ -14,16 +19,16 @@ import { Cache } from '../utils/Cache';
 import { EventEmitter } from 'events';
 
 export class BackendChatService extends EventEmitter {
-  private openAIService: BackendOpenAIService;
-  private scrapingService: BackendWebScrapingService;
+  private openAIService: IBackendOpenAIService;
+  private scrapingService: IBackendWebScrapingService;
   private sessions: Map<string, ChatSession>;
   private cache: Cache;
   private logger: Logger;
   private config: SystemConfig;
 
   constructor(
-    openAIService: BackendOpenAIService,
-    scrapingService: BackendWebScrapingService,
+    openAIService: IBackendOpenAIService,
+    scrapingService: IBackendWebScrapingService,
     config: SystemConfig
   ) {
     super();
@@ -34,8 +39,7 @@ export class BackendChatService extends EventEmitter {
     this.cache = new Cache(config.cache);
     this.logger = new Logger('BackendChatService');
 
-    // 세션 정리 스케줄러 설정
-    setInterval(() => this.cleanupSessions(), 1800000); // 30분마다 실행
+    setInterval(() => this.cleanupSessions(), 1800000);
   }
 
   private validateMessage(message: Partial<ChatMessage>): ChatMessage {
@@ -98,7 +102,6 @@ export class BackendChatService extends EventEmitter {
     }
 
     try {
-      // 새 메시지 추가
       const newMessage = this.validateMessage({
         role: 'user',
         content: userMessage,
@@ -108,76 +111,86 @@ export class BackendChatService extends EventEmitter {
 
       session.messages.push(newMessage);
 
-      // 컨텍스트 분석
-      const intent = await this.openAIService.analyzeIntent(userMessage, session.context);
-      if (!Array.isArray(intent.dataSources)) {
-        intent.dataSources = [];
-      }
+      // Intent 분석 및 타입 가드
+      const intent = await this.openAIService.analyzeIntent(
+        userMessage, 
+        session.context
+      );
 
-      // 필요한 데이터 스크래핑
-      let scrapingResults = [];
-      if (intent.requiresDataFetch) {
+      // 데이터 스크래핑 시 소스 검증 추가
+      let scrapingResults: ScrapingResult[] = [];
+      if (intent.requiresDataFetch && Array.isArray(intent.dataSources)) {
+        const validSources = intent.dataSources.filter(source => 
+          this.scrapingService.validateSource(source)
+        );
+        
         scrapingResults = await Promise.all(
-          intent.dataSources.map((source: string) => 
+          validSources.map(source => 
             this.scrapingService.fetchData(source, session.context.campus)
           )
         );
       }
 
+      // OpenAI 서비스 컨텍스트 구성
+      const openAIContext: OpenAIServiceContext = {
+        ...session.context,
+        scrapingResults,
+        intent,
+        messageHistory: session.messages
+      };
+
       // AI 응답 생성
       const aiResponse = await this.openAIService.generateResponse(
-        session.messages,
-        {
-          ...session.context,
-          scrapingResults,
-          intent
-        }
+        userMessage,
+        openAIContext
       );
 
-      // 응답 검증 및 후처리
       if (!aiResponse || typeof aiResponse.content !== 'string') {
         throw new Error('Invalid AI response');
       }
 
-      // 응답 메시지 추가
+      // ChatMessage 메타데이터 구성
+      const messageMetadata: ChatMessage['metadata'] = {
+        sourceSystem: intent.dataSources?.join(',') || '',
+        confidence: intent.confidence,
+        processingTime: Date.now() - startTime
+      };
+
       const assistantMessage = this.validateMessage({
         role: 'assistant',
         content: aiResponse.content,
         timestamp: new Date(),
         status: 'delivered',
-        metadata: {
-          sourceSystem: intent.dataSources.join(','),
-          confidence: intent.confidence,
-          processingTime: Date.now() - startTime
-        }
+        metadata: messageMetadata
       });
 
       session.messages.push(assistantMessage);
 
-      // 세션 메트릭스 업데이트
       await this.updateSessionMetrics(session);
 
-      // 컨텍스트 업데이트
-      session.context.lastUpdate = new Date();
-      if (intent.dataSources.length > 0 && Array.isArray(session.context.lastAccessedSystems)) {
+      // lastAccessedSystems 업데이트 시 안전성 확보
+      if (intent.dataSources?.length > 0 && Array.isArray(session.context.lastAccessedSystems)) {
         session.context.lastAccessedSystems = [
           ...new Set([...session.context.lastAccessedSystems, ...intent.dataSources])
-        ].slice(-5); // 최근 5개만 유지
+        ].slice(-5);
       }
 
-      // 캐시 업데이트
       await this.updateSessionCache(session);
+
+      // ChatResponse 메타데이터 구성
+      const responseMetadata: ChatResponse['metadata'] = {
+        source: aiResponse.metadata?.source,
+        confidence: intent.confidence,
+        context: aiResponse.metadata?.context,
+        suggestedActions: intent.suggestedActions,
+        relatedTopics: aiResponse.metadata?.relatedTopics
+      };
 
       return {
         success: true,
         data: {
           content: aiResponse.content,
-          metadata: {
-            ...aiResponse.metadata,
-            processingTime: Date.now() - startTime,
-            confidence: intent.confidence,
-            suggestedActions: intent.suggestedActions
-          }
+          metadata: responseMetadata
         },
         metadata: {
           timestamp: new Date(),
@@ -200,9 +213,8 @@ export class BackendChatService extends EventEmitter {
       }
 
       if (error instanceof AuthenticationError && session.context.activeServices) {
-        // 인증 관련 오류 처리
         session.context.activeServices = session.context.activeServices.filter(
-          service => service !== error.system
+          service => service !== (error as AuthenticationError).system
         );
         throw error;
       }

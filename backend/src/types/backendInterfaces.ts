@@ -49,14 +49,7 @@ export interface ChatSession {
   id: string;
   userId: string;
   messages: ChatMessage[];
-  context: {
-    campus?: '신촌' | '원주';
-    lastUpdate?: Date;
-    preferences?: Record<string, any>;
-    currentTopic?: string;
-    activeServices?: string[];
-    lastAccessedSystems?: string[];
-  };
+  context: ChatContext;
   metadata: {
     createdAt: Date;
     lastActive: Date;
@@ -66,20 +59,6 @@ export interface ChatSession {
   }
 }
 
-// 스크래핑 관련 타입
-export interface ScrapingResult {
-  source: string;
-  data: any;
-  timestamp: Date;
-  metadata: {
-    campus?: string;
-    category?: string;
-    tags?: string[];
-    updateFrequency?: string;
-    lastSuccessfulUpdate?: Date;
-    reliability?: number;
-  }
-}
 
 export interface ScrapingError {
   code: string;
@@ -238,4 +217,68 @@ export interface ScrapedData {
     category?: string;
     confidence?: number;
   }
+}
+
+export interface Intent {
+  requiresDataFetch: boolean;
+  dataSources: string[];
+  confidence: number;
+  suggestedActions: string[];
+  metadata?: {
+    category?: string;
+    priority?: number;
+  }
+}
+
+export interface ScrapingResult {
+  source: string;
+  data: any;
+  timestamp: Date;
+  metadata?: {
+    campus?: '신촌' | '원주';
+    updateFrequency?: string;
+    reliability?: number;
+  }
+}
+
+export interface OpenAIResponse {
+  content: string;
+  metadata?: {
+    confidence?: number;
+    context?: any;
+    suggestedActions?: string[];
+    source?: string;
+    processingTime?: number;
+  }
+}
+export interface ChatContext {
+  campus?: '신촌' | '원주';
+  lastUpdate?: Date;
+  preferences?: Record<string, any>;
+  currentTopic?: string;
+  activeServices?: string[];
+  lastAccessedSystems?: string[];
+}
+
+// OpenAI 서비스의 컨텍스트 타입 정의
+export interface OpenAIServiceContext {
+  campus?: '신촌' | '원주';
+  lastUpdate?: Date;
+  preferences?: Record<string, any>;
+  currentTopic?: string;
+  activeServices?: string[];
+  lastAccessedSystems?: string[];
+  scrapingResults: ScrapingResult[];
+  intent: Intent;
+  messageHistory: ChatMessage[];
+}
+// 서비스 인터페이스 정의
+export interface IBackendOpenAIService {
+  analyzeIntent(message: string, context: ChatContext): Promise<Intent>;
+  generateResponse(message: string, context: OpenAIServiceContext): Promise<OpenAIResponse>;
+}
+
+export interface IBackendWebScrapingService {
+  fetchData(source: string, campus?: '신촌' | '원주'): Promise<ScrapingResult>;
+  validateSource(source: string): boolean;
 }
