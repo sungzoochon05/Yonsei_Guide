@@ -210,12 +210,17 @@ export interface ScrapedData {
   id: string;
   type: string;
   content: any;
+  title?: string;  // 추가
+  timestamp: Date; // 추가
   metadata: {
     source: string;
     timestamp: Date;
     campus?: '신촌' | '원주';
     category?: string;
     confidence?: number;
+  };
+  meta?: {  // 추가
+    [key: string]: any;
   }
 }
 
@@ -249,6 +254,7 @@ export interface OpenAIResponse {
     suggestedActions?: string[];
     source?: string;
     processingTime?: number;
+    relatedTopics?: string[];  // 추가
   }
 }
 export interface ChatContext {

@@ -1,9 +1,11 @@
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { OpenAI } from 'openai';
-import { 
-  ScrapedData, 
-  ChatResponse, 
-  IntentAnalysis 
+import {
+  ChatContext,
+  OpenAIServiceContext,  // 이미 정의됨
+  ChatResponse,
+  ScrapedData,
+  Intent
 } from '../types/backendInterfaces';
 import { CacheManager } from '../scrapers/components/CacheManager';
 import { NetworkError } from '../errors/NetworkError';
@@ -19,14 +21,6 @@ interface TokenProcessor {
   processTitle: (token: string) => void;
   processContent: (token: string) => void;
   processMeta: (token: string) => void;
-}
-
-interface ChatContext {
-  conversationId: string;
-  messageHistory: ChatCompletionMessageParam[];
-  campus: '신촌' | '원주';
-  lastIntent?: IntentAnalysis;
-  relevantData?: ScrapedData[];
 }
 
 interface PromptTemplate {
@@ -162,11 +156,13 @@ export class BackendOpenAIService {
 
       // 응답 생성
       const response: ChatResponse = {
-        message: completion.choices[0]?.message?.content || "죄송합니다. 응답을 생성할 수 없습니다.",
-        timestamp: new Date(),
-        confidence: 1.0,
-        source: 'openai',
-        intent: await this.analyzeIntent(message, campus)
+        content: completion.choices[0]?.message?.content || "죄송합니다. 응답을 생성할 수 없습니다.",
+        metadata: {
+          source: 'openai',
+          confidence: 1.0,
+          suggestedActions: [],
+          context: await this.analyzeIntent(message, campus)
+        }
       };
 
       // 캐시 저장
@@ -182,10 +178,10 @@ export class BackendOpenAIService {
   public async analyzeIntent(
     message: string,
     campus: '신촌' | '원주' = '신촌'
-  ): Promise<IntentAnalysis> {
+  ): Promise<Intent> {
     try {
       const cacheKey = this.generateCacheKey(message, undefined, campus, 'intent');
-      const cached = this.getCachedResponse<IntentAnalysis>(cacheKey);
+      const cached = this.getCachedResponse<Intent>(cacheKey);
       if (cached) return cached;
 
       const messages: ChatCompletionMessageParam[] = [
@@ -216,7 +212,7 @@ export class BackendOpenAIService {
         throw new Error('Failed to parse intent analysis result');
       }
 
-      const intent: IntentAnalysis = {
+      const intent: Intent = {
         category: result.category || "general",
         action: result.action || "query",
         keywords: result.keywords || [],

@@ -1,11 +1,14 @@
-import { ScrapedData, LibraryResponse } from '../types/backendInterfaces';
-import { ScrapingConfig } from '../types/scrapingTypes';
-import ScrapingService from './ScrapingService';
+import { 
+  LibraryResource,
+  ScrapedData 
+} from '../types/backendInterfaces';
+import { ScrapingConfig } from '../types/scraping/platforms';
+import { ScrapingService } from './ScrapingService';
 
 export class BackendWebScrapingService {
   private static instance: BackendWebScrapingService;
   private scrapingService: ScrapingService;
-  private scraping: Map<string, Promise<ScrapedData[] | LibraryResponse>>;
+  private scraping: Map<string, Promise<ScrapedData[] | LibraryResource>>;
 
   private constructor() {
     this.scrapingService = ScrapingService.getInstance();
@@ -22,7 +25,7 @@ export class BackendWebScrapingService {
   public async scrapeByCategory(
     category: string,
     options: { campus?: '신촌' | '원주'; count?: number } = {}
-  ): Promise<ScrapedData[] | LibraryResponse> {
+  ): Promise<ScrapedData[] | LibraryResource> {
     const { campus = '신촌', count = 20 } = options;
     const config: ScrapingConfig = {
       campus,
@@ -32,7 +35,7 @@ export class BackendWebScrapingService {
   
     try {
       const result = await this.scrapingService.scrapeContent(category, config);
-      return result.data; // ScrapingResult.data가 ScrapedData[] | LibraryResponse를 반환하도록 수정
+      return result.data;
     } catch (error) {
       console.error(`Error in scrapeByCategory(${category}):`, error);
       throw error;
@@ -43,7 +46,7 @@ export class BackendWebScrapingService {
     category: string,
     campus: '신촌' | '원주',
     count: number
-  ): Promise<ScrapedData[] | LibraryResponse> {
+  ): Promise<ScrapedData[] | LibraryResource> {
     const config: ScrapingConfig = {
       campus,
       count,
