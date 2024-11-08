@@ -213,14 +213,14 @@ export class BackendOpenAIService {
       }
 
       const intent: Intent = {
-        category: result.category || "general",
-        action: result.action || "query",
-        keywords: result.keywords || [],
+        requiresDataFetch: result.requiredData?.length > 0,
+        dataSources: result.requiredData || [],
         confidence: result.confidence || 0,
-        parameters: result.parameters || {},
-        context: result.context,
-        priority: result.priority || 'medium',
-        requiredData: result.requiredData || []
+        suggestedActions: [],
+        metadata: {
+          category: result.category || "general",
+          priority: this.convertPriorityToNumber(result.priority || 'medium')
+        }
       };
 
       this.cacheManager.set(cacheKey, intent);
@@ -229,17 +229,25 @@ export class BackendOpenAIService {
     } catch (error) {
       console.error('Intent Analysis Error:', error);
       return {
-        category: "general",
-        action: "query",
-        keywords: [],
+        requiresDataFetch: false,
+        dataSources: [],
         confidence: 0,
-        parameters: {},
-        priority: 'low',
-        requiredData: []
+        suggestedActions: [],
+        metadata: {
+          category: "general",
+          priority: 1
+        }
       };
     }
   }
-
+  private convertPriorityToNumber(priority: string): number {
+    switch (priority) {
+      case 'high': return 3;
+      case 'medium': return 2;
+      case 'low': return 1;
+      default: return 1;
+    }
+  }
   private processScrapedData(data: ScrapedData[], message: string): ScrapedData[] {
     // 관련성 점수 계산 및 필터링
     const scoredData = data

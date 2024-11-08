@@ -10,7 +10,8 @@ import {
   ScrapingResult,
   OpenAIResponse,
   IBackendOpenAIService,
-  IBackendWebScrapingService
+  IBackendWebScrapingService,
+  OpenAIServiceContext
 } from '../types/backendInterfaces';
 import BackendOpenAIService from './BackendOpenAIService';
 import BackendWebScrapingService from './BackendWebScrapingService';
