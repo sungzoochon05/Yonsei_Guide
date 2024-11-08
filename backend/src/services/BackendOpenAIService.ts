@@ -34,7 +34,7 @@ interface PromptTemplate {
   content: string;
 }
 
-class BackendOpenAIService {
+export class BackendOpenAIService {
   private static instance: BackendOpenAIService;
   private openai: OpenAI;
   private contexts: Map<string, ChatContext>;

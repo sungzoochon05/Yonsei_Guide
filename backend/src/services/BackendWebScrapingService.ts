@@ -2,7 +2,7 @@ import { ScrapedData, LibraryResponse } from '../types/backendInterfaces';
 import { ScrapingConfig } from '../types/scrapingTypes';
 import ScrapingService from './ScrapingService';
 
-class BackendWebScrapingService {
+export class BackendWebScrapingService {
   private static instance: BackendWebScrapingService;
   private scrapingService: ScrapingService;
   private scraping: Map<string, Promise<ScrapedData[] | LibraryResponse>>;

@@ -7,8 +7,8 @@ import {
   SystemConfig,
   APIResponse
 } from '../types/backendInterfaces';
-import { BackendOpenAIService } from './BackendOpenAIService';
-import { BackendWebScrapingService } from './BackendWebScrapingService';
+import BackendOpenAIService from './BackendOpenAIService';
+import BackendWebScrapingService from './BackendWebScrapingService';
 import { Logger } from '../utils/Logger';
 import { Cache } from '../utils/Cache';
 import { EventEmitter } from 'events';
