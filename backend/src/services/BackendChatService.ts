@@ -1,317 +1,321 @@
-import { ChatResponse, ChatMessage, ChatRole, ScrapedData, IntentAnalysis } from '../types/backendInterfaces';
-import BackendOpenAIService from './BackendOpenAIService';
-import BackendWebScrapingService from './BackendWebScrapingService';
-import { NetworkError } from '../errors/NetworkError';
+import { 
+  ChatMessage, 
+  ChatResponse, 
+  ChatSession, 
+  TimeoutError,
+  AuthenticationError,
+  SystemConfig,
+  APIResponse
+} from '../types/backendInterfaces';
+import { BackendOpenAIService } from './BackendOpenAIService';
+import { BackendWebScrapingService } from './BackendWebScrapingService';
+import { Logger } from '../utils/Logger';
+import { Cache } from '../utils/Cache';
+import { EventEmitter } from 'events';
 
-interface ChatContext {
-  conversationId: string;
-  previousMessages: Array<{
-    role: 'user' | 'assistant';
-    content: string;
-    timestamp: Date;
-  }>;
-  currentTopic?: string;
-  lastIntent?: IntentAnalysis;
-  campus: '신촌' | '원주';
-  lastUpdate: Date;
-  messageCount: number;
-  relevantData?: ScrapedData[];
-}
-
-interface ProcessMessageResult {
-  response: ChatResponse;
-  updatedContext: ChatContext;
-  scrapedData?: ScrapedData[];
-}
-
-export class BackendChatService {
-  private static instance: BackendChatService;
+export class BackendChatService extends EventEmitter {
   private openAIService: BackendOpenAIService;
-  private webScrapingService: BackendWebScrapingService;
-  private contexts: Map<string, ChatContext>;
-  
-  private readonly MAX_CONTEXT_MESSAGES = 10;
-  private readonly CONTEXT_EXPIRY = 30 * 60 * 1000; // 30분
-  private readonly MAX_RETRIES = 3;
+  private scrapingService: BackendWebScrapingService;
+  private sessions: Map<string, ChatSession>;
+  private cache: Cache;
+  private logger: Logger;
+  private config: SystemConfig;
 
-  private constructor() {
-    this.openAIService = BackendOpenAIService.getInstance();
-    this.webScrapingService = BackendWebScrapingService.getInstance();
-    this.contexts = new Map();
+  constructor(
+    openAIService: BackendOpenAIService,
+    scrapingService: BackendWebScrapingService,
+    config: SystemConfig
+  ) {
+    super();
+    this.openAIService = openAIService;
+    this.scrapingService = scrapingService;
+    this.sessions = new Map();
+    this.config = config;
+    this.cache = new Cache(config.cache);
+    this.logger = new Logger('BackendChatService');
 
-    // 주기적으로 만료된 컨텍스트 정리
-    setInterval(() => this.cleanExpiredContexts(), 5 * 60 * 1000);
+    // 세션 정리 스케줄러 설정
+    setInterval(() => this.cleanupSessions(), 1800000); // 30분마다 실행
   }
 
-  public static getInstance(): BackendChatService {
-    if (!BackendChatService.instance) {
-      BackendChatService.instance = new BackendChatService();
+  private validateMessage(message: Partial<ChatMessage>): ChatMessage {
+    if (!message.role || !['user', 'assistant'].includes(message.role)) {
+      throw new Error('Invalid message role');
     }
-    return BackendChatService.instance;
-  }
-
-  public async processMessage(
-    message: string,
-    conversationId: string,
-    campus: '신촌' | '원주' = '신촌'
-  ): Promise<ProcessMessageResult> {
-    let context = this.getOrCreateContext(conversationId, campus);
-    let retryCount = 0;
-
-    while (retryCount < this.MAX_RETRIES) {
-      try {
-        // 1. 의도 분석
-        const intent = await this.analyzeIntent(message, context);
-        
-        // 2. 관련 데이터 수집
-        const scrapedData = await this.collectRelevantData(intent, context);
-        
-        // 3. 응답 생성
-        const response = await this.generateResponse(message, context, scrapedData);
-        
-        // 4. 컨텍스트 업데이트
-        const updatedContext = this.updateContext(context, message, response, intent, scrapedData);
-        
-        return {
-          response,
-          updatedContext,
-          scrapedData
-        };
-
-      } catch (error) {
-        retryCount++;
-        if (retryCount === this.MAX_RETRIES) {
-          throw this.handleError(error);
-        }
-        await this.delay(1000 * retryCount);
-      }
+    if (!message.content || typeof message.content !== 'string') {
+      throw new Error('Invalid message content');
     }
-
-    throw new Error('Maximum retry attempts exceeded');
+    return {
+      role: message.role as 'user' | 'assistant',
+      content: message.content,
+      timestamp: message.timestamp || new Date(),
+      status: message.status || 'pending',
+      metadata: message.metadata || {}
+    };
   }
 
-  private getOrCreateContext(
-    conversationId: string,
-    campus: '신촌' | '원주'
-  ): ChatContext {
-    let context = this.contexts.get(conversationId);
-    
-    if (!context || this.isContextExpired(context)) {
-      context = {
-        conversationId,
-        previousMessages: [],
-        campus,
+  private async updateSessionMetrics(session: ChatSession): Promise<void> {
+    session.metadata.messageCount++;
+    session.metadata.lastActive = new Date();
+    this.emit('sessionUpdate', {
+      sessionId: session.id,
+      metrics: session.metadata
+    });
+  }
+
+  async initializeSession(userId: string, campus: '신촌' | '원주'): Promise<string> {
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const session: ChatSession = {
+      id: sessionId,
+      userId: userId,
+      messages: [],
+      context: {
+        campus: campus,
         lastUpdate: new Date(),
-        messageCount: 0
-      };
-      this.contexts.set(conversationId, context);
-    }
-    
-    return context;
+        preferences: {},
+        activeServices: [],
+        lastAccessedSystems: []
+      },
+      metadata: {
+        createdAt: new Date(),
+        lastActive: new Date(),
+        messageCount: 0,
+        platform: 'web',
+      }
+    };
+
+    this.sessions.set(sessionId, session);
+    this.logger.info(`Session initialized`, { sessionId, userId, campus });
+    return sessionId;
   }
 
-  private async analyzeIntent(
-    message: string,
-    context: ChatContext
-  ): Promise<IntentAnalysis> {
-    try {
-      // 컨텍스트 기반 의도 분석
-      const contextualMessage = this.buildContextualMessage(message, context);
-      return await this.openAIService.analyzeIntent(contextualMessage, context.campus);
-    } catch (error) {
-      console.error('Intent analysis error:', error);
-      throw new Error('의도 분석 중 오류가 발생했습니다.');
-    }
-  }
+  async processMessage(sessionId: string, userMessage: string): Promise<APIResponse<ChatResponse>> {
+    const startTime = Date.now();
+    let session = this.sessions.get(sessionId);
 
-  private async collectRelevantData(
-    intent: IntentAnalysis,
-    context: ChatContext
-  ): Promise<ScrapedData[]> {
-    if (intent.confidence < 0.5 || intent.category === 'general') {
-      return [];
+    if (!session) {
+      throw new Error('Invalid session ID');
     }
 
     try {
-      const data = await this.webScrapingService.scrapeByCategory(
-        intent.category,
+      // 새 메시지 추가
+      const newMessage = this.validateMessage({
+        role: 'user',
+        content: userMessage,
+        timestamp: new Date(),
+        status: 'sent'
+      });
+
+      session.messages.push(newMessage);
+
+      // 컨텍스트 분석
+      const intent = await this.openAIService.analyzeIntent(userMessage, session.context);
+      
+      // 필요한 데이터 스크래핑
+      let scrapingResults = [];
+      if (intent.requiresDataFetch) {
+        scrapingResults = await Promise.all(
+          intent.dataSources.map(source => 
+            this.scrapingService.fetchData(source, session.context.campus)
+          )
+        );
+      }
+
+      // AI 응답 생성
+      const aiResponse = await this.openAIService.generateResponse(
+        session.messages,
         {
-          campus: context.campus,
-          count: 10
+          ...session.context,
+          scrapingResults,
+          intent
         }
       );
 
-      return Array.isArray(data) ? data : [];
+      // 응답 검증 및 후처리
+      if (!aiResponse || typeof aiResponse.content !== 'string') {
+        throw new Error('Invalid AI response');
+      }
+
+      // 응답 메시지 추가
+      const assistantMessage = this.validateMessage({
+        role: 'assistant',
+        content: aiResponse.content,
+        timestamp: new Date(),
+        status: 'delivered',
+        metadata: {
+          sourceSystem: intent.dataSources.join(','),
+          confidence: intent.confidence,
+          processingTime: Date.now() - startTime
+        }
+      });
+
+      session.messages.push(assistantMessage);
+
+      // 세션 메트릭스 업데이트
+      await this.updateSessionMetrics(session);
+
+      // 컨텍스트 업데이트
+      session.context.lastUpdate = new Date();
+      if (intent.dataSources.length > 0) {
+        session.context.lastAccessedSystems = [
+          ...new Set([...session.context.lastAccessedSystems, ...intent.dataSources])
+        ].slice(-5); // 최근 5개만 유지
+      }
+
+      // 캐시 업데이트
+      await this.updateSessionCache(session);
+
+      return {
+        success: true,
+        data: {
+          content: aiResponse.content,
+          metadata: {
+            ...aiResponse.metadata,
+            processingTime: Date.now() - startTime,
+            confidence: intent.confidence,
+            suggestedActions: intent.suggestedActions
+          }
+        },
+        metadata: {
+          timestamp: new Date(),
+          requestId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          processingTime: Date.now() - startTime
+        }
+      };
 
     } catch (error) {
-      console.error('Data collection error:', error);
+      this.logger.error('Error processing message', { 
+        sessionId, 
+        error: error.message,
+        stack: error.stack 
+      });
+
+      if (error instanceof TimeoutError) {
+        throw error;
+      }
+
+      if (error instanceof AuthenticationError) {
+        // 인증 관련 오류 처리
+        session.context.activeServices = session.context.activeServices.filter(
+          service => service !== error.system
+        );
+        throw error;
+      }
+
+      throw new Error(`Failed to process message: ${error.message}`);
+    }
+  }
+
+  async updateSessionCache(session: ChatSession): Promise<void> {
+    const cacheKey = `session:${session.id}`;
+    await this.cache.set(cacheKey, session, this.config.cache.ttl);
+  }
+
+  private async cleanupSessions(): Promise<void> {
+    const now = new Date();
+    for (const [sessionId, session] of this.sessions.entries()) {
+      const inactiveTime = now.getTime() - session.metadata.lastActive.getTime();
+      if (inactiveTime > this.config.timeout.default) {
+        this.sessions.delete(sessionId);
+        this.logger.info(`Session cleaned up due to inactivity`, { sessionId });
+        this.emit('sessionClosed', { sessionId, reason: 'timeout' });
+      }
+    }
+  }
+
+  // 세션 관리 메서드들
+  async getSession(sessionId: string): Promise<ChatSession | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      // 캐시에서 세션 확인
+      const cachedSession = await this.cache.get(`session:${sessionId}`);
+      if (cachedSession) {
+        this.sessions.set(sessionId, cachedSession);
+        return cachedSession;
+      }
+    }
+    return session;
+  }
+
+  async clearSession(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+    await this.cache.delete(`session:${sessionId}`);
+    this.logger.info(`Session cleared`, { sessionId });
+    this.emit('sessionClosed', { sessionId, reason: 'manual' });
+  }
+
+  async updateSessionContext(
+    sessionId: string, 
+    context: Partial<ChatSession['context']>
+  ): Promise<void> {
+    const session = await this.getSession(sessionId);
+    if (session) {
+      session.context = { 
+        ...session.context, 
+        ...context,
+        lastUpdate: new Date()
+      };
+      await this.updateSessionCache(session);
+      this.emit('contextUpdated', { sessionId, context: session.context });
+    }
+  }
+
+  async getMessageHistory(
+    sessionId: string,
+    limit?: number,
+    beforeTimestamp?: Date
+  ): Promise<ChatMessage[]> {
+    const session = await this.getSession(sessionId);
+    if (!session) {
       return [];
     }
-  }
 
-  private async generateResponse(
-    message: string,
-    context: ChatContext,
-    scrapedData?: ScrapedData[]
-  ): Promise<ChatResponse> {
-    const contextString = this.buildContextString(context);
-    
-    return await this.openAIService.generateResponse(
-      message,
-      contextString,
-      scrapedData,
-      context.campus
-    );
-  }
-
-  private updateContext(
-    context: ChatContext,
-    message: string,
-    response: ChatResponse,
-    intent: IntentAnalysis,
-    scrapedData?: ScrapedData[]
-  ): ChatContext {
-    // 이전 메시지 업데이트
-    context.previousMessages = [
-      ...context.previousMessages,
-      {
-        role: 'user',
-        content: message,
-        timestamp: new Date()
-      },
-      {
-        role: 'assistant',
-        content: response.text,
-        timestamp: new Date()
-      }
-    ].slice(-this.MAX_CONTEXT_MESSAGES);
-
-    // 컨텍스트 정보 업데이트
-    context.currentTopic = this.determineCurrentTopic(intent, context.currentTopic);
-    context.lastIntent = intent;
-    context.lastUpdate = new Date();
-    context.messageCount += 1;
-    context.relevantData = scrapedData;
-
-    this.contexts.set(context.conversationId, context);
-    return context;
-  }
-
-  private buildContextualMessage(message: string, context: ChatContext): string {
-    const contextParts = [];
-
-    if (context.currentTopic) {
-      contextParts.push(`Current topic: ${context.currentTopic}`);
+    let messages = session.messages;
+    if (beforeTimestamp) {
+      messages = messages.filter(msg => msg.timestamp < beforeTimestamp);
+    }
+    if (limit) {
+      messages = messages.slice(-limit);
     }
 
-    if (context.lastIntent) {
-      contextParts.push(`Previous intent: ${context.lastIntent.category}`);
-    }
-
-    const recentMessages = context.previousMessages
-      .slice(-2)
-      .map(msg => `${msg.role}: ${msg.content}`)
-      .join('\n');
-
-    if (recentMessages) {
-      contextParts.push(`Recent messages:\n${recentMessages}`);
-    }
-
-    return `${contextParts.join('\n')}\nUser message: ${message}`;
+    return messages;
   }
 
-  private buildContextString(context: ChatContext): string {
-    const parts = [];
-
-    if (context.previousMessages.length > 0) {
-      const recentMessages = context.previousMessages
-        .map(msg => `${msg.role}: ${msg.content}`)
-        .join('\n');
-      parts.push(`대화 내역:\n${recentMessages}`);
+  async deleteMessage(sessionId: string, timestamp: Date): Promise<boolean> {
+    const session = await this.getSession(sessionId);
+    if (!session) {
+      return false;
     }
 
-    if (context.currentTopic) {
-      parts.push(`현재 주제: ${context.currentTopic}`);
+    const initialLength = session.messages.length;
+    session.messages = session.messages.filter(msg => msg.timestamp !== timestamp);
+
+    if (session.messages.length !== initialLength) {
+      await this.updateSessionCache(session);
+      this.emit('messageDeleted', { sessionId, timestamp });
+      return true;
     }
 
-    if (context.relevantData?.length) {
-      parts.push(`관련 정보 수: ${context.relevantData.length}개`);
-    }
-
-    return parts.join('\n\n');
+    return false;
   }
 
-  private determineCurrentTopic(
-    intent: IntentAnalysis,
-    currentTopic?: string
-  ): string | undefined {
-    if (intent.confidence > 0.7) {
-      return intent.category;
-    }
-    return currentTopic;
+  // 모니터링 및 디버깅 메서드들
+  getActiveSessionsCount(): number {
+    return this.sessions.size;
   }
 
-  private isContextExpired(context: ChatContext): boolean {
-    return Date.now() - context.lastUpdate.getTime() > this.CONTEXT_EXPIRY;
-  }
-
-  private cleanExpiredContexts(): void {
-    const now = Date.now();
-    for (const [id, context] of this.contexts.entries()) {
-      if (now - context.lastUpdate.getTime() > this.CONTEXT_EXPIRY) {
-        this.contexts.delete(id);
-      }
+  getSessionMetrics(sessionId: string): Pick<ChatSession, 'metadata'> | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      return { metadata: session.metadata };
     }
   }
 
-  private handleError(error: any): Error {
-    if (error instanceof NetworkError) {
-      return new Error('네트워크 연결에 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  async exportSessionData(sessionId: string): Promise<ChatSession> {
+    const session = await this.getSession(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
     }
-
-    if (error instanceof TimeoutError) {
-      return new Error('서버 응답 시간이 초과되었습니다. 다시 시도해주세요.');
-    }
-
-    console.error('Chat service error:', error);
-    return new Error('죄송합니다. 요청을 처리하는 중에 오류가 발생했습니다.');
-  }
-
-  private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  public async resetContext(conversationId: string): Promise<void> {
-    this.contexts.delete(conversationId);
-  }
-
-  public async updateCampus(
-    conversationId: string,
-    campus: '신촌' | '원주'
-  ): Promise<void> {
-    const context = this.contexts.get(conversationId);
-    if (context) {
-      context.campus = campus;
-      context.lastUpdate = new Date();
-      this.contexts.set(conversationId, context);
-    }
-  }
-
-  public getContextStats(): {
-    activeContexts: number;
-    averageMessagesPerContext: number;
-    oldestContext: Date;
-  } {
-    const contexts = Array.from(this.contexts.values());
-    const totalMessages = contexts.reduce((sum, ctx) => sum + ctx.messageCount, 0);
-    const oldestUpdate = Math.min(...contexts.map(ctx => ctx.lastUpdate.getTime()));
-
-    return {
-      activeContexts: this.contexts.size,
-      averageMessagesPerContext: totalMessages / (this.contexts.size || 1),
-      oldestContext: new Date(oldestUpdate)
-    };
+    return JSON.parse(JSON.stringify(session)); // Deep copy
   }
 }
-
-export default BackendChatService;

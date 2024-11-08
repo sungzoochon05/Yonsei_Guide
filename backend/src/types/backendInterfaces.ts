@@ -1,202 +1,228 @@
-// src/types/backendInterfaces.ts
-
-export interface ScrapingResult<T> {
-  success: boolean;
-  data: T | null;
-  error?: string;
-  timestamp: Date;
-  source: string;
-  metadata?: Record<string, any>;
+// Auth 관련 타입
+export interface AuthCredentials {
+  username: string;
+  password: string;
 }
 
-export interface ScrapingConfig {
-  retryAttempts: number;
-  timeout: number;
-  cacheExpiry: number;
-  concurrent: boolean;
-  userAgent: string;
-  maxParallelRequests: number;
-  rateLimitDelay: number;
-  headers: Record<string, string>;
+export interface AuthToken {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  tokenType: string;
 }
 
-export interface ScrapingOptions {
-  useCache?: boolean;
-  forceRefresh?: boolean;
-  timeout?: number;
-  retryAttempts?: number;
-  headers?: Record<string, string>;
+export interface AuthSession {
+  userId: string;
+  campus: '신촌' | '원주';
+  permissions: string[];
+  expiresAt: Date;
 }
 
-export interface CourseInfo {
-  id: string;
-  name: string;
-  professor: string;
-  semester: string;
-  url: string;
-  description?: string;
-  credits?: number;
-  schedule?: string[];
-  department?: string;
-  platform: 'learnus' | 'portal';
-}
-
-export interface NoticeInfo {
-  id: string;
-  title: string;
-  content: string;
-  author: string;
-  date: Date;
-  attachments?: AttachmentInfo[];
-  important: boolean;
-  views: number;
-  platform: string;
-}
-
-export interface AssignmentInfo {
-  id: string;
-  title: string;
-  description: string;
-  dueDate: Date;
-  startDate: Date;
-  status: AssignmentStatus;
-  maxScore: number;
-  attachments?: AttachmentInfo[];
-  platform: string;
-}
-
-export type AssignmentStatus = 'not_submitted' | 'submitted' | 'graded';
-
-export interface AttachmentInfo {
-  id: string;
-  name: string;
-  url: string;
-  size?: number;
-  type?: string;
-}
-
-export interface RoomInfo {
-  id: string;
-  name: string;
-  capacity: number;
-  available: boolean;
-  location: string;
-  facilities?: string[];
-  schedule?: RoomSchedule[];
-}
-
-export interface RoomSchedule {
-  day: string;
-  startTime: string;
-  endTime: string;
-  purpose: string;
-  organizer?: string;
-}
-
-export interface Config {
-  scrapingConfig: ScrapingConfig;
-  apiConfig: {
-    baseURL: string;
-    timeout: number;
-    retryAttempts: number;
-    rateLimitDelay: number;
-    maxConcurrentRequests: number;
-  };
-  cacheConfig: {
-    enabled: boolean;
-    duration: number;
-    maxSize: number;
-    cleanupInterval: number;
-  };
-  authConfig: {
-    sessionTimeout: number;
-    maxLoginAttempts: number;
-    lockoutDuration: number;
-  };
-}
-
-export interface ScrapedData {
-  courseInfo?: CourseInfo[];
-  notices?: NoticeInfo[];
-  assignments?: AssignmentInfo[];
-  roomInfo?: RoomInfo[];
-  error?: string;
-  timestamp: Date;
-  source: string;
-  title?: string;
-  content?: string;
-  meta?: Record<string, any>;
-}
-
-export interface IntentAnalysis {
-  category: string;
-  action: string;
-  keywords: string[];
-  confidence: number;
-  parameters: Record<string, any>;
-  priority: 'high' | 'medium' | 'low';
-  requiredData: string[];
-  context?: string;
-}
-
-export interface ChatResponse {
-  message: string;
-  timestamp: Date;
-  confidence: number;
-  source: string;
-  intent?: IntentAnalysis;
-  data?: unknown;
-}
-
-export interface LibraryResponse {
-  rooms: RoomInfo[];
-  timestamp: Date;
-  totalAvailable: number;
-  peakHours?: {
-    start: string;
-    end: string;
-    occupancyRate: number;
-  }[];
-}
-
-export interface NetworkErrorOptions {
-  type: 'timeout' | 'rateLimit' | 'connection' | 'unknown';
-  retryAfter?: number;
-  statusCode?: number;
-  details?: Record<string, any>;
-}
-
-export type ChatRole = "user" | "assistant";
+// Chat 관련 타입
+export type ChatRole = 'user' | 'assistant';
+export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'error';
 
 export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: Date;
+  status?: MessageStatus;
   metadata?: {
-    source?: string;
+    sourceSystem?: string;
     confidence?: number;
-    context?: string;
-  };
+    processingTime?: number;
+  }
 }
 
 export interface ChatResponse {
-  message: string;  // text 대신 message 사용
-  intent?: IntentAnalysis;
-  context?: string;
-  confidence: number;
-  timestamp: Date;
-  source?: string;
-  data?: unknown;
-  metadata?: Record<string, any>;
+  content: string;
+  metadata?: {
+    source?: string;
+    confidence?: number;
+    context?: any;
+    suggestedActions?: string[];
+    relatedTopics?: string[];
+  }
 }
 
-export interface IntentAnalysis {
+export interface ChatSession {
+  id: string;
+  userId: string;
+  messages: ChatMessage[];
+  context: {
+    campus?: '신촌' | '원주';
+    lastUpdate?: Date;
+    preferences?: Record<string, any>;
+    currentTopic?: string;
+    activeServices?: string[];
+    lastAccessedSystems?: string[];
+  };
+  metadata: {
+    createdAt: Date;
+    lastActive: Date;
+    messageCount: number;
+    platform: string;
+    deviceInfo?: string;
+  }
+}
+
+// 스크래핑 관련 타입
+export interface ScrapingResult {
+  source: string;
+  data: any;
+  timestamp: Date;
+  metadata: {
+    campus?: string;
+    category?: string;
+    tags?: string[];
+    updateFrequency?: string;
+    lastSuccessfulUpdate?: Date;
+    reliability?: number;
+  }
+}
+
+export interface ScrapingError {
+  code: string;
+  message: string;
+  source: string;
+  timestamp: Date;
+  details?: {
+    url?: string;
+    statusCode?: number;
+    responseBody?: string;
+    headers?: Record<string, string>;
+  };
+  retryCount?: number;
+  critical?: boolean;
+}
+
+// 시스템 에러 타입들
+export class TimeoutError extends Error {
+  constructor(
+    message: string,
+    public readonly timeout: number,
+    public readonly operation: string
+  ) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+export class AuthenticationError extends Error {
+  constructor(
+    message: string,
+    public readonly system: string,
+    public readonly details?: any
+  ) {
+    super(message);
+    this.name = 'AuthenticationError';
+  }
+}
+
+export class ScrapingTimeoutError extends TimeoutError {
+  constructor(
+    message: string,
+    timeout: number,
+    public readonly source: string,
+    public readonly url: string
+  ) {
+    super(message, timeout, 'scraping');
+    this.name = 'ScrapingTimeoutError';
+  }
+}
+
+// 플랫폼 특화 타입들
+export interface PortalNotification {
+  id: string;
+  title: string;
+  content: string;
   category: string;
-  action: string;
-  keywords: string[];
-  confidence: number;
-  parameters: Record<string, any>;
-  priority: 'high' | 'medium' | 'low';
-  requiredData: string[];
-  context?: string;
+  publishedAt: Date;
+  importance: 'high' | 'medium' | 'low';
+  attachments?: {
+    name: string;
+    url: string;
+    size?: number;
+  }[];
+}
+
+export interface LearnUsAssignment {
+  id: string;
+  courseId: string;
+  title: string;
+  description: string;
+  dueDate: Date;
+  submissionStatus: 'pending' | 'submitted' | 'graded' | 'late';
+  grade?: {
+    score?: number;
+    feedback?: string;
+    gradedAt?: Date;
+  };
+}
+
+export interface LibraryResource {
+  id: string;
+  title: string;
+  author: string;
+  publisher: string;
+  year: number;
+  location: string;
+  status: 'available' | 'borrowed' | 'reserved';
+  dueDate?: Date;
+  campus: '신촌' | '원주';
+  category: string;
+  callNumber: string;
+}
+
+// API Response 타입들
+export interface APIResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: {
+    code: string;
+    message: string;
+    details?: any;
+  };
+  metadata: {
+    timestamp: Date;
+    requestId: string;
+    processingTime: number;
+  };
+}
+
+// 설정 및 환경 타입들
+export interface SystemConfig {
+  environment: 'development' | 'production' | 'test';
+  logLevel: 'debug' | 'info' | 'warn' | 'error';
+  timeout: {
+    default: number;
+    scraping: number;
+    ai: number;
+  };
+  retryPolicy: {
+    maxAttempts: number;
+    backoffMs: number;
+  };
+  cache: {
+    ttl: number;
+    checkPeriod: number;
+  };
+}
+
+// 모니터링 및 로깅 타입들
+export interface SystemMetrics {
+  timestamp: Date;
+  service: string;
+  metrics: {
+    requestCount: number;
+    errorCount: number;
+    averageResponseTime: number;
+    cpuUsage: number;
+    memoryUsage: number;
+  };
+  alerts?: {
+    level: 'warning' | 'critical';
+    message: string;
+    timestamp: Date;
+  }[];
 }

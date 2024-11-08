@@ -1,93 +1,145 @@
-// src/types/scraping/platform.ts
+import { AuthCredentials } from '../backendInterfaces';
 
-import { 
-  CourseInfo, 
-  NoticeInfo, 
-  AssignmentInfo, 
-  RoomInfo,
-  ScrapingResult, 
-  ScrapingOptions,
-  AttachmentInfo
-} from '../backendInterfaces';
-
-export interface PlatformCredentials {
-  username: string;
-  password: string;
-}
-
-export interface Platform {
-  authenticate(credentials: PlatformCredentials): Promise<boolean>;
-  isLoggedIn(): boolean;
-  logout(): Promise<void>;
-}
-
-export interface CoursePlatform extends Platform {
-  getCourses(options?: ScrapingOptions): Promise<ScrapingResult<CourseInfo[]>>;
-  getCourseDetails(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<CourseInfo>>;
-  getAssignments(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<AssignmentInfo[]>>;
-  scrapeCourseNotices(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<NoticeInfo[]>>;
-}
-
-export interface LibraryPlatform extends Platform {
-  getRooms(options?: ScrapingOptions): Promise<ScrapingResult<RoomInfo[]>>;
-  reserveRoom(roomId: string, timeSlot: string): Promise<ScrapingResult<boolean>>;
-  cancelReservation(reservationId: string): Promise<ScrapingResult<boolean>>;
-}
-
-export interface AttachmentPlatform {
-  getAttachments(id: string): Promise<ScrapingResult<AttachmentInfo[]>>;
-  downloadAttachment(attachmentId: string): Promise<Buffer>;
-}
-
-export interface PlatformError {
-  code: string;
-  message: string;
-  details?: Record<string, unknown>;
-  timestamp: Date;
-  retryable: boolean;
-  retryAfter?: number;
-}
-
-export interface PlatformResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: PlatformError;
-  timestamp: Date;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PaginatedResponse<T> extends PlatformResponse<T[]> {
-  page: number;
-  totalPages: number;
-  totalItems: number;
-  itemsPerPage: number;
-  hasNextPage: boolean;
+export interface ScrapingConfig {
+  baseUrl: string;
+  endpoints: {
+    [key: string]: string;
+  };
+  headers?: Record<string, string>;
+  timeout?: number;
+  retryCount?: number;
+  campus?: '신촌' | '원주';
+  auth?: {
+    required: boolean;
+    type: 'cookie' | 'token' | 'basic';
+    endpoint?: string;
+  };
+  rateLimit?: {
+    maxRequests: number;
+    windowMs: number;
+  };
+  caching?: {
+    enabled: boolean;
+    ttl: number;
+  };
 }
 
 export interface PlatformConfig {
-  baseUrl: string;
-  timeout: number;
-  retryAttempts: number;
-  headers?: Record<string, string>;
-  cacheEnabled?: boolean;
-  cacheDuration?: number;
+  portal: ScrapingConfig;
+  learnUs: ScrapingConfig;
+  library: ScrapingConfig;
 }
 
-export interface PlatformMetrics {
+export interface ScrapingCredentials extends AuthCredentials {
+  platform: keyof PlatformConfig;
+  campus?: '신촌' | '원주';
+}
+
+export const defaultConfig: PlatformConfig = {
+  portal: {
+    baseUrl: 'https://portal.yonsei.ac.kr',
+    endpoints: {
+      login: '/login',
+      notices: '/notices',
+      academic: '/academic',
+      schedule: '/schedule',
+      grades: '/grades',
+      registration: '/course-registration',
+      personal: '/personal-info',
+      certificates: '/certificates'
+    },
+    timeout: 10000,
+    retryCount: 3,
+    auth: {
+      required: true,
+      type: 'cookie',
+      endpoint: '/auth/login'
+    },
+    rateLimit: {
+      maxRequests: 100,
+      windowMs: 60000
+    },
+    caching: {
+      enabled: true,
+      ttl: 300000 // 5 minutes
+    }
+  },
+  learnUs: {
+    baseUrl: 'https://learn.yonsei.ac.kr',
+    endpoints: {
+      courses: '/courses',
+      assignments: '/assignments',
+      announcements: '/announcements',
+      materials: '/materials',
+      discussions: '/discussions',
+      grades: '/grades',
+      attendance: '/attendance',
+      zoom: '/zoom-meetings'
+    },
+    timeout: 10000,
+    retryCount: 3,
+    auth: {
+      required: true,
+      type: 'token',
+      endpoint: '/api/auth/login'
+    },
+    rateLimit: {
+      maxRequests: 150,
+      windowMs: 60000
+    },
+    caching: {
+      enabled: true,
+      ttl: 600000 // 10 minutes
+    }
+  },
+  library: {
+    baseUrl: 'https://library.yonsei.ac.kr',
+    endpoints: {
+      search: '/search',
+      myLibrary: '/my-library',
+      reservations: '/reservations',
+      loans: '/loans',
+      availability: '/availability',
+      databases: '/databases',
+      rooms: '/study-rooms',
+      holdings: '/holdings',
+      reservations: '/book-reservations'
+    },
+    timeout: 10000,
+    retryCount: 3,
+    auth: {
+      required: true,
+      type: 'token',
+      endpoint: '/api/auth'
+    },
+    rateLimit: {
+      maxRequests: 200,
+      windowMs: 60000
+    },
+    caching: {
+      enabled: true,
+      ttl: 1800000 // 30 minutes
+    }
+  }
+};
+
+export interface ScrapingSession {
+  platform: keyof PlatformConfig;
+  authToken?: string;
+  cookies?: string[];
+  lastAccess: Date;
   requestCount: number;
-  successCount: number;
-  failureCount: number;
-  averageResponseTime: number;
-  lastRequestTime?: Date;
-  lastFailureTime?: Date;
-  lastSuccessTime?: Date;
+  campus: '신촌' | '원주';
 }
 
-export interface PlatformSession {
-  id: string;
-  platform: string;
-  startTime: Date;
-  lastActivity: Date;
-  authenticated: boolean;
-  metrics: PlatformMetrics;
+export interface ScrapingOptions {
+  timeout?: number;
+  retryCount?: number;
+  force?: boolean; // Force refresh cache
+  priority?: 'high' | 'normal' | 'low';
+  campus?: '신촌' | '원주';
 }
+
+export type ScrapingEndpoint = keyof typeof defaultConfig.portal.endpoints | 
+                              keyof typeof defaultConfig.learnUs.endpoints |
+                              keyof typeof defaultConfig.library.endpoints;
