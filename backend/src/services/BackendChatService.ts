@@ -110,12 +110,15 @@ export class BackendChatService extends EventEmitter {
 
       // 컨텍스트 분석
       const intent = await this.openAIService.analyzeIntent(userMessage, session.context);
-      
+      if (!Array.isArray(intent.dataSources)) {
+        intent.dataSources = [];
+      }
+
       // 필요한 데이터 스크래핑
       let scrapingResults = [];
       if (intent.requiresDataFetch) {
         scrapingResults = await Promise.all(
-          intent.dataSources.map(source => 
+          intent.dataSources.map((source: string) => 
             this.scrapingService.fetchData(source, session.context.campus)
           )
         );
@@ -156,7 +159,7 @@ export class BackendChatService extends EventEmitter {
 
       // 컨텍스트 업데이트
       session.context.lastUpdate = new Date();
-      if (intent.dataSources.length > 0) {
+      if (intent.dataSources.length > 0 && Array.isArray(session.context.lastAccessedSystems)) {
         session.context.lastAccessedSystems = [
           ...new Set([...session.context.lastAccessedSystems, ...intent.dataSources])
         ].slice(-5); // 최근 5개만 유지
@@ -183,18 +186,20 @@ export class BackendChatService extends EventEmitter {
         }
       };
 
-    } catch (error) {
-      this.logger.error('Error processing message', { 
-        sessionId, 
-        error: error.message,
-        stack: error.stack 
-      });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        this.logger.error('Error processing message', {
+          sessionId,
+          error: error.message,
+          stack: error.stack
+        });
+      }
 
       if (error instanceof TimeoutError) {
         throw error;
       }
 
-      if (error instanceof AuthenticationError) {
+      if (error instanceof AuthenticationError && session.context.activeServices) {
         // 인증 관련 오류 처리
         session.context.activeServices = session.context.activeServices.filter(
           service => service !== error.system
@@ -202,7 +207,11 @@ export class BackendChatService extends EventEmitter {
         throw error;
       }
 
-      throw new Error(`Failed to process message: ${error.message}`);
+      if (error instanceof Error) {
+        throw new Error(`Failed to process message: ${error.message}`);
+      }
+      
+      throw new Error('An unknown error occurred');
     }
   }
 
@@ -223,12 +232,10 @@ export class BackendChatService extends EventEmitter {
     }
   }
 
-  // 세션 관리 메서드들
   async getSession(sessionId: string): Promise<ChatSession | undefined> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      // 캐시에서 세션 확인
-      const cachedSession = await this.cache.get(`session:${sessionId}`);
+      const cachedSession = await this.cache.get<ChatSession>(`session:${sessionId}`);
       if (cachedSession) {
         this.sessions.set(sessionId, cachedSession);
         return cachedSession;
@@ -299,7 +306,6 @@ export class BackendChatService extends EventEmitter {
     return false;
   }
 
-  // 모니터링 및 디버깅 메서드들
   getActiveSessionsCount(): number {
     return this.sessions.size;
   }

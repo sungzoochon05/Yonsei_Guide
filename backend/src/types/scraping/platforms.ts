@@ -97,7 +97,6 @@ export const defaultConfig: PlatformConfig = {
     endpoints: {
       search: '/search',
       myLibrary: '/my-library',
-      reservations: '/reservations',
       loans: '/loans',
       availability: '/availability',
       databases: '/databases',

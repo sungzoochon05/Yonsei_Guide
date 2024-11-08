@@ -226,3 +226,16 @@ export interface SystemMetrics {
     timestamp: Date;
   }[];
 }
+
+export interface ScrapedData {
+  id: string;
+  type: string;
+  content: any;
+  metadata: {
+    source: string;
+    timestamp: Date;
+    campus?: '신촌' | '원주';
+    category?: string;
+    confidence?: number;
+  }
+}
