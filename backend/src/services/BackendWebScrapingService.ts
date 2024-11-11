@@ -1,125 +1,122 @@
 import { 
   LibraryResource,
   ScrapedData 
- } from '../types/backendInterfaces';
- import { ScrapingConfig } from '../types/scraping/platforms';
- import { ScrapingService } from './ScrapingService';
- import { LearnUs } from '../scrapers/platforms/LearnUs';
- import { YonseiPortal } from '../scrapers/platforms/YonseiPortal';
- import { LibrarySystem } from '../scrapers/platforms/LibrarySystem';
- import { ContentExplorer } from '../scrapers/components/ContentExplorer';
- import { CacheManager } from '../scrapers/components/CacheManager';
- import { AdaptiveParser } from '../scrapers/components/AdaptiveParser';
- import { URLManager } from '../scrapers/components/URLManager';
- 
- /**
- * 연세대학교의 모든 웹 스크래핑 기능을 통합 관리하는 서비스
- * 싱글톤 패턴을 사용하여 단일 인스턴스만 유지
- */
- export class BackendWebScrapingService {
+} from '../types/backendInterfaces';
+import { ScrapingConfig } from '../types/scraping/platforms';
+import { ScrapingService } from './ScrapingService';
+import { LearnUs } from '../scrapers/platforms/LearnUs';
+import { YonseiPortal } from '../scrapers/platforms/YonseiPortal';
+import { LibrarySystem } from '../scrapers/platforms/LibrarySystem';
+import { ContentExplorer } from '../scrapers/components/ContentExplorer';
+import { CacheManager } from '../scrapers/components/CacheManager';
+import { AdaptiveParser } from '../scrapers/components/AdaptiveParser';
+import { URLManager } from '../scrapers/components/URLManager';
+import axios, { AxiosInstance } from 'axios';
+
+export class BackendWebScrapingService {
   private static instance: BackendWebScrapingService;
   private scrapingService: ScrapingService;
   private scraping: Map<string, Promise<ScrapedData[] | LibraryResource>>;
- 
+  private readonly axiosInstance: AxiosInstance;
+
   private constructor() {
     // axios 인스턴스 생성
-    const axiosInstance = axios.create({
+    this.axiosInstance = axios.create({
       timeout: 5000,
       headers: {
         'Content-Type': 'application/json'
       }
     });
 
-    // 공통으로 사용될 컴포넌트들 초기화
-    const contentExplorer = new ContentExplorer(axiosInstance);
-    const cacheManager = new CacheManager(60); // 60분 캐시
+    // 컴포넌트 초기화 - 각각의 플랫폼에 맞는 URL Manager 인스턴스 생성
+    const learnUsUrlManager = new URLManager('https://learnus.yonsei.ac.kr');
+    const portalUrlManager = new URLManager('https://portal.yonsei.ac.kr');
+    const libraryUrlManager = new URLManager('https://library.yonsei.ac.kr');
+
+    // 공통 컴포넌트 초기화
+    const contentExplorer = new ContentExplorer(this.axiosInstance);
+    const cacheManager = new CacheManager(60);
     const adaptiveParser = new AdaptiveParser();
-    const urlManager = new URLManager('https://yonsei.ac.kr');
 
     this.scrapingService = this.initializeScrapingService(
       contentExplorer,
-      adaptiveParser, // 순서 변경: adaptiveParser를 두 번째 인자로
-      cacheManager,   // cacheManager를 세 번째 인자로
-      urlManager
+      adaptiveParser,
+      cacheManager,
+      { learnUsUrlManager, portalUrlManager, libraryUrlManager }
     );
     this.scraping = new Map();
   }
- 
-  /**
-   * 싱글톤 인스턴스 반환
-   */
+
   public static getInstance(): BackendWebScrapingService {
     if (!BackendWebScrapingService.instance) {
       BackendWebScrapingService.instance = new BackendWebScrapingService();
     }
     return BackendWebScrapingService.instance;
   }
- 
-  /**
-   * 통합 스크래핑 서비스 초기화
-   */
+
   private initializeScrapingService(
     contentExplorer: ContentExplorer,
     adaptiveParser: AdaptiveParser,
     cacheManager: CacheManager,
-    urlManager: URLManager
+    urlManagers: {
+      learnUsUrlManager: URLManager;
+      portalUrlManager: URLManager;
+      libraryUrlManager: URLManager;
+    }
   ): ScrapingService {
     const learnUsService = new LearnUs(
       contentExplorer,
       adaptiveParser,
       cacheManager,
-      urlManager
+      urlManagers.learnUsUrlManager
     );
     const portalService = new YonseiPortal(
       contentExplorer,
       adaptiveParser,
       cacheManager,
-      urlManager
+      urlManagers.portalUrlManager
     );
     const libraryService = new LibrarySystem(
       contentExplorer,
       adaptiveParser,
       cacheManager,
-      urlManager
+      urlManagers.libraryUrlManager
     );
- 
+
     return {
       async scrape(url: string, config: ScrapingConfig): Promise<ScrapedData> {
-        const category = config.category || 'general';
+        const { type } = config;
         
-        switch(category) {
+        switch(type) {
           case 'learnus':
           case 'course':
           case 'assignment':
           case 'notice':
-            return learnUsService.scrapeContent(url, config);
+            return learnUsService.getScrapeData(url, config);
             
           case 'portal':
           case 'academic':
           case 'scholarship':
           case 'career':
-            return portalService.scrapeContent(url, config);
+            return portalService.getScrapeData(url, config);
             
           case 'library':
           case 'books':
           case 'studyroom':
           case 'facilities':
-            return libraryService.scrapeContent(url, config);
+            return libraryService.getScrapeData(url, config);
             
           default:
-            throw new Error(`Unknown category: ${category}`);
+            throw new Error(`Unknown scraping type: ${type}`);
         }
       },
- 
+
       async getLibraryStatus(): Promise<LibraryResource> {
-        return libraryService.getLibraryStatus();
+        return libraryService.getLibraryResourceStatus();
       }
     };
   }
- 
-  /**
-   * 기본 스크래핑 함수 - 내부적으로 사용
-   */
+
   private async scrapeByCategory(
     category: string,
     options: { campus?: '신촌' | '원주'; count?: number } = {}
@@ -127,8 +124,8 @@ import {
     const { campus = '신촌', count = 20 } = options;
     const config: ScrapingConfig = {
       campus,
-      category,
-      maxResults: count
+      type: category,
+      limit: count
     };
   
     try {
