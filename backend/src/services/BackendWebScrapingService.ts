@@ -1,9 +1,13 @@
+import axios, { AxiosInstance } from 'axios';
 import { 
+  ScrapedData,
   LibraryResource,
-  ScrapedData 
+  ScrapingResult,
+  ScrapingConfig,
+  Campus,
+  Config,
+  NoticeInfo
 } from '../types/backendInterfaces';
-import { ScrapingConfig } from '../types/scraping/platforms';
-import { ScrapingService } from './ScrapingService';
 import { LearnUs } from '../scrapers/platforms/LearnUs';
 import { YonseiPortal } from '../scrapers/platforms/YonseiPortal';
 import { LibrarySystem } from '../scrapers/platforms/LibrarySystem';
@@ -11,16 +15,17 @@ import { ContentExplorer } from '../scrapers/components/ContentExplorer';
 import { CacheManager } from '../scrapers/components/CacheManager';
 import { AdaptiveParser } from '../scrapers/components/AdaptiveParser';
 import { URLManager } from '../scrapers/components/URLManager';
-import axios, { AxiosInstance } from 'axios';
+import { NetworkError, ParseError } from '../errors/ScrapingError';
 
 export class BackendWebScrapingService {
   private static instance: BackendWebScrapingService;
-  private scrapingService: ScrapingService;
-  private scraping: Map<string, Promise<ScrapedData[] | LibraryResource>>;
+  private readonly learnUs: LearnUs;
+  private readonly portalService: YonseiPortal;
+  private readonly libraryService: LibrarySystem;
+  private readonly cacheManager: CacheManager;
   private readonly axiosInstance: AxiosInstance;
 
   private constructor() {
-    // axios 인스턴스 생성
     this.axiosInstance = axios.create({
       timeout: 5000,
       headers: {
@@ -28,44 +33,34 @@ export class BackendWebScrapingService {
       }
     });
 
-    // 컴포넌트 초기화 - 각각의 플랫폼에 맞는 URL Manager 인스턴스 생성
+    this.cacheManager = new CacheManager(60);
+    const contentExplorer = new ContentExplorer(this.axiosInstance);
+    const adaptiveParser = new AdaptiveParser();
+
     const learnUsUrlManager = new URLManager('https://learnus.yonsei.ac.kr');
     const portalUrlManager = new URLManager('https://portal.yonsei.ac.kr');
     const libraryUrlManager = new URLManager('https://library.yonsei.ac.kr');
 
-    // 공통 컴포넌트 초기화
-    const contentExplorer = new ContentExplorer(this.axiosInstance);
-    const cacheManager = new CacheManager(60);
-    const adaptiveParser = new AdaptiveParser();
-
     this.learnUs = new LearnUs(
       contentExplorer,
       adaptiveParser,
-      learnUsUrlManager,  // CacheManager 대신 URLManager 전달
-      cacheManager
+      learnUsUrlManager,
+      this.cacheManager
     );
-    
+
     this.portalService = new YonseiPortal(
       contentExplorer,
       adaptiveParser,
-      portalUrlManager,  // CacheManager 대신 URLManager 전달
-      cacheManager
+      portalUrlManager,
+      this.cacheManager
     );
-    
+
     this.libraryService = new LibrarySystem(
       contentExplorer,
       adaptiveParser,
-      libraryUrlManager,  // CacheManager 대신 URLManager 전달
-      cacheManager
+      libraryUrlManager,
+      this.cacheManager
     );
-    
-    this.scrapingService = this.initializeScrapingService(
-      contentExplorer,
-      adaptiveParser,
-      cacheManager,
-      { learnUsUrlManager, portalUrlManager, libraryUrlManager }
-    );
-    this.scraping = new Map();
   }
 
   public static getInstance(): BackendWebScrapingService {
@@ -75,184 +70,177 @@ export class BackendWebScrapingService {
     return BackendWebScrapingService.instance;
   }
 
-  private initializeScrapingService(
-    contentExplorer: ContentExplorer,
-    adaptiveParser: AdaptiveParser,
-    cacheManager: CacheManager,
-    urlManagers: {
-      learnUsUrlManager: URLManager;
-      portalUrlManager: URLManager;
-      libraryUrlManager: URLManager;
-    }
-  ): ScrapingService {
-    const learnUsService = new LearnUs(
-      contentExplorer,
-      adaptiveParser,
-      cacheManager,
-      urlManagers.learnUsUrlManager
-    );
-    const portalService = new YonseiPortal(
-      contentExplorer,
-      adaptiveParser,
-      cacheManager,
-      urlManagers.portalUrlManager
-    );
-    const libraryService = new LibrarySystem(
-      contentExplorer,
-      adaptiveParser,
-      cacheManager,
-      urlManagers.libraryUrlManager
-    );
+  public async scrapeByCategory(
+    category: string,
+    options: { campus?: Campus; count?: number } = {}
+  ): Promise<ScrapingResult<ScrapedData[]>> {
+    try {
+      const { campus = '신촌', count = 20 } = options;
+      const config: ScrapingConfig = {
+        baseUrl: '',
+        endpoints: {},
+        campus,
+        limit: count
+      };
 
-    return {
-      async scrape(url: string, config: ScrapingConfig): Promise<ScrapedData> {
-        const { type } = config;
-        
-        switch(type) {
-          case 'learnus':
-          case 'course':
-          case 'assignment':
-          case 'notice':
-            return learnUsService.getScrapeData(url, config);
-            
-          case 'portal':
-          case 'academic':
-          case 'scholarship':
-          case 'career':
-            return portalService.getScrapeData(url, config);
-            
-          case 'library':
-          case 'books':
-          case 'studyroom':
-          case 'facilities':
-            return libraryService.getScrapeData(url, config);
-            
-          default:
-            throw new Error(`Unknown scraping type: ${type}`);
+      let scrapedDataArray: ScrapedData[] = [];
+
+      switch (category) {
+        case 'notices':
+        case 'academic':
+        case 'scholarship': {
+          const response = await this.portalService.getScrapeData(category, config);
+          scrapedDataArray = this.convertToScrapedDataArray(response.data);
+          break;
         }
-      },
+        case 'course':
+        case 'assignment': {
+          const response = await this.learnUs.getScrapeData(category, config);
+          scrapedDataArray = this.convertToScrapedDataArray(response.data);
+          break;
+        }
+        case 'library': {
+          const response = await this.libraryService.getScrapeData(category, config);
+          const libraryData = response.data as unknown as LibraryResource;
+          scrapedDataArray = this.convertLibraryDataToScrapedData(libraryData);
+          break;
+        }
+        default:
+          throw new Error(`Unknown category: ${category}`);
+      }
+      
 
-      async getLibraryStatus(): Promise<LibraryResource> {
-        return libraryService.getLibraryResourceStatus();
+      return {
+        success: true,
+        data: scrapedDataArray,
+        timestamp: new Date(),
+        source: category,
+        metadata: {
+          campus,
+          updateFrequency: '5m',
+          reliability: 0.95
+        }
+      };
+    } catch (error) {
+      if (error instanceof NetworkError || error instanceof ParseError) {
+        throw error;
+      }
+      throw new Error(`Failed to scrape ${category}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private convertToScrapedDataArray(data: any): ScrapedData[] {
+    if (Array.isArray(data)) {
+      return data.map(item => ({
+        id: item.id,
+        type: item.type || 'unknown',
+        content: item,
+        timestamp: new Date(),
+        metadata: {
+          source: item.platform || 'unknown',
+          category: item.category || 'general',
+          confidence: 1.0
+        }
+      }));
+    }
+    return [];
+  }
+
+  private convertLibraryDataToScrapedData(libraryData: LibraryResource): ScrapedData[] {
+    const result: ScrapedData[] = [];
+
+    // 상태 정보 변환
+    libraryData.status.forEach(status => {
+      result.push({
+        id: status.id,
+        type: 'library_status',
+        content: status,
+        timestamp: new Date(),
+        metadata: {
+          source: 'library',
+          category: 'facility',
+          confidence: 1.0
+        }
+      });
+    });
+
+    // 운영시간 정보 변환
+    libraryData.hours.forEach((hour, index) => {
+      result.push({
+        id: `hours_${index}`,
+        type: 'library_hours',
+        content: hour,
+        timestamp: new Date(),
+        metadata: {
+          source: 'library',
+          category: 'operation',
+          confidence: 1.0
+        }
+      });
+    });
+
+    // 공지사항 변환
+    libraryData.notices.forEach(notice => {
+      result.push({
+        id: notice.id,
+        type: 'library_notice',
+        content: notice,
+        timestamp: notice.timestamp,
+        metadata: {
+          source: 'library',
+          category: 'notice',
+          confidence: 1.0
+        }
+      });
+    });
+
+    return result;
+  }
+
+  public clearCache(): void {
+    this.cacheManager.clear();
+  }
+
+  public getStats(): any {
+    return {
+      cacheInfo: {
+        active: true,
+        lastCleared: new Date()
+      },
+      lastUpdate: new Date(),
+      availablePlatforms: {
+        learnUs: true,
+        portal: true,
+        library: true
       }
     };
   }
 
-  public async scrapeByCategory(
-    category: string,
-    options: { campus?: '신촌' | '원주'; count?: number } = {}
-  ): Promise<ScrapingResult<ScrapedData[]>> {
+  public async scrapeLibrary(options: { campus?: Campus }): Promise<ScrapingResult<LibraryResource>> {
     try {
-      const config: ScrapingConfig = {
-        campus: options.campus || '신촌',
-        limit: options.count || 20
+      const response = await this.libraryService.getScrapeData('library', {
+        baseUrl: '',
+        endpoints: {},
+        campus: options.campus || '신촌'
+      });
+
+      const libraryData = response.data as unknown as LibraryResource;
+
+      return {
+        success: true,
+        data: libraryData,
+        timestamp: new Date(),
+        source: 'library',
+        metadata: {
+          campus: options.campus || '신촌',
+          updateFrequency: '1m',
+          reliability: 0.99
+        }
       };
-  
-      const result = await this.scrapingService.scrape(category, config);
-      return Array.isArray(result) ? result : [result];
     } catch (error) {
-      console.error(`Error in scrapeByCategory(${category}):`, error);
-      throw error;
+      throw new Error(`Failed to scrape library info: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
- 
-  /**
-   * 카테고리에 따른 플랫폼 결정
-   */
-  private getPlatformForCategory(category: string): string {
-    switch(category) {
-      case 'course':
-      case 'assignment':
-      case 'notice':
-        return 'learnus';
-      case 'academic':
-      case 'scholarship':
-      case 'career':
-        return 'portal';
-      case 'library':
-      case 'books':
-      case 'studyroom':
-        return 'library';
-      default:
-        return 'portal';
-    }
-  }
- 
-  // =========== LearnUs 관련 메서드 ===========
-  
-  /**
-   * LearnUs 강의 정보 조회
-   */
-  public async getCourseInfo(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('course', options);
-  }
- 
-  /**
-   * LearnUs 과제 정보 조회
-   */
-  public async getAssignments(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('assignment', options);
-  }
- 
-  /**
-   * LearnUs 공지사항 조회
-   */
-  public async getLearnUsNotices(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('notice', options);
-  }
- 
-  // =========== 포털 관련 메서드 ===========
- 
-  /**
-   * 장학금 정보 조회
-   */
-  public async getScholarships(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('scholarship', options);
-  }
- 
-  /**
-   * 학사 정보 조회
-   */
-  public async getAcademicInfo(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('academic', options);
-  }
- 
-  /**
-   * 취업/진로 정보 조회
-   */
-  public async getCareerInfo(options: { campus?: '신촌' | '원주'; count?: number } = {}) {
-    return this.scrapeByCategory('career', options);
-  }
- 
-  // =========== 도서관 관련 메서드 ===========
- 
-  /**
-   * 도서관 일반 정보 조회
-   */
-  public async getLibraryInfo(options: { count?: number } = {}) {
-    return this.scrapeByCategory('library', options);
-  }
- 
-  /**
-   * 열람실 현황 조회
-   */
-  public async getStudyRoomStatus(options: { campus?: '신촌' | '원주' } = {}) {
-    return this.scrapeByCategory('studyroom', options);
-  }
- 
-  /**
-   * 도서관 시설 정보 조회
-   */
-  public async getLibraryFacilities(options: { campus?: '신촌' | '원주' } = {}) {
-    return this.scrapeByCategory('facilities', options);
-  }
- 
-  /**
-   * 도서관 실시간 현황 조회
-   */
-  public async getLibraryStatus(): Promise<LibraryResource> {
-    return await this.scrapingService.getLibraryStatus();
-  }
- }
- 
- export default BackendWebScrapingService;
+}
+
+export default BackendWebScrapingService;

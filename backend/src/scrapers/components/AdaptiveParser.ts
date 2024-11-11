@@ -1,5 +1,3 @@
-// src/scrapers/components/AdaptiveParser.ts
-
 import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import { ParseError } from '../../errors/ScrapingError';
@@ -8,63 +6,71 @@ import {
   NoticeInfo, 
   AssignmentInfo,
   AttachmentInfo,
-  AssignmentStatus 
+  AssignmentStatus,
+  ScrapedData,
+  LibraryResource,
+  LibraryStatus,
+  LibraryHours,
+  TimeRange,
+  Platform,
+  Campus
 } from '../../types/backendInterfaces';
-import { parseFileSizeToBytes } from '../../utils/typeGuards';
 
 export class AdaptiveParser {
-  parseCourseList(html: string, platform: 'learnus' | 'portal'): CourseInfo[] {
+  // 일반 페이지 파싱
+  parsePage(html: string, platform: Platform = 'portal'): ScrapedData {
     try {
       const $ = cheerio.load(html);
-      return $('.course-list-item').map((_, element): CourseInfo => {
+      const title = $('h1').first().text().trim() || '제목 없음';
+      const content = $('main, .content, #content').first().text().trim() || $('body').text().trim();
+
+      return {
+        id: `page_${Date.now()}`,
+        type: 'general',
+        title,
+        content,
+        timestamp: new Date(),
+        metadata: {
+          source: platform,
+          category: 'general',
+          confidence: 1.0
+        }
+      };
+    } catch (error) {
+      throw new ParseError('페이지 파싱 실패: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  // 강좌 목록 파싱
+  parseCourseList(html: string, platform: 'learnus' | 'portal', campus: Campus): CourseInfo[] {
+    try {
+      const $ = cheerio.load(html);
+      return $('.course-item').map((_, element): CourseInfo => {
         const $element = $(element);
         return {
-          id: $element.attr('data-courseid') || '',
-          name: $element.find('.course-title').text().trim(),
+          id: $element.attr('data-course-id') || `course_${Date.now()}_${_}`,
+          title: $element.find('.course-title').text().trim(),
+          content: $element.find('.course-description').text().trim(),
+          name: $element.find('.course-name').text().trim(),
           professor: $element.find('.professor-name').text().trim(),
-          semester: $element.find('.semester-info').text().trim(),
-          url: $element.find('a').attr('href') || '',
+          semester: $element.find('.semester').text().trim(),
+          url: $element.find('.course-link').attr('href') || '',
           description: $element.find('.course-description').text().trim(),
-          credits: parseInt($element.find('.course-credits').text().trim()) || 0,
-          department: $element.find('.department-name').text().trim(),
-          schedule: $element.find('.course-schedule li').map((_, schedule) => 
-            $(schedule).text().trim()
-          ).get(),
-          platform
+          credits: parseInt($element.find('.credits').text()) || 0,
+          department: $element.find('.department').text().trim(),
+          schedule: $element.find('.schedule li').map((_, el) => $(el).text().trim()).get(),
+          platform,
+          timestamp: new Date(),
+          campus
         };
       }).get();
     } catch (error) {
-      throw new ParseError('강좌 목록 파싱 실패');
+      throw new ParseError('강좌 목록 파싱 실패: ' + (error instanceof Error ? error.message : String(error)));
     }
   }
 
-  parseCourseDetails(html: string, platform: 'learnus' | 'portal'): CourseInfo {
-    try {
-      const $ = cheerio.load(html);
-      const $course = $('.course-details');
-
-      if (!$course.length) {
-        throw new ParseError('강좌 상세 정보를 찾을 수 없습니다');
-      }
-
-      return {
-        id: $course.attr('data-course-id') || '',
-        name: $course.find('.course-name').text().trim(),
-        professor: $course.find('.professor-name').text().trim(),
-        semester: $course.find('.semester-info').text().trim(),
-        url: $course.find('.course-link').attr('href') || '',
-        description: this.parseDescription($, $course),
-        credits: parseInt($course.find('.credits').text().trim()) || 0,
-        schedule: this.parseSchedule($, $course),
-        department: $course.find('.department').text().trim(),
-        platform
-      };
-    } catch (error) {
-      throw new ParseError('강좌 상세 정보 파싱 실패');
-    }
-  }
-
-  parseNotices(html: string, platform: string): NoticeInfo[] {
+  // 공지사항 파싱
+  parseNotices(html: string, platform: Platform, campus: Campus): NoticeInfo[] {
     try {
       const $ = cheerio.load(html);
       return $('.notice-item').map((_, element): NoticeInfo => {
@@ -72,7 +78,7 @@ export class AdaptiveParser {
         const attachments = this.parseAttachments($, $element.find('.attachments'));
 
         return {
-          id: $element.attr('data-id') || '',
+          id: $element.attr('data-id') || `notice_${Date.now()}_${_}`,
           title: $element.find('.notice-title').text().trim(),
           content: $element.find('.notice-content').text().trim(),
           author: $element.find('.notice-author').text().trim(),
@@ -80,15 +86,18 @@ export class AdaptiveParser {
           important: $element.hasClass('important-notice'),
           views: parseInt($element.find('.notice-views').text().trim()) || 0,
           attachments,
-          platform
+          platform,
+          timestamp: new Date(),
+          campus
         };
       }).get();
     } catch (error) {
-      throw new ParseError('공지사항 파싱 실패');
+      throw new ParseError('공지사항 파싱 실패: ' + (error instanceof Error ? error.message : String(error)));
     }
   }
 
-  parseAssignments(html: string, platform: string): AssignmentInfo[] {
+  // 과제 파싱
+  parseAssignments(html: string, platform: Platform, campus: Campus): AssignmentInfo[] {
     try {
       const $ = cheerio.load(html);
       return $('.assignment-item').map((_, element): AssignmentInfo => {
@@ -96,65 +105,75 @@ export class AdaptiveParser {
         const attachments = this.parseAttachments($, $element.find('.attachments'));
         
         return {
-          id: $element.attr('data-id') || '',
+          id: $element.attr('data-id') || `assignment_${Date.now()}_${_}`,
           title: $element.find('.assignment-title').text().trim(),
+          content: $element.find('.assignment-content').text().trim(),
           description: $element.find('.assignment-description').text().trim(),
           dueDate: new Date($element.find('.due-date').text().trim()),
           startDate: new Date($element.find('.start-date').text().trim()),
           status: this.parseAssignmentStatus($element.find('.status').text().trim()),
-          maxScore: parseInt($element.find('.max-score').text().trim()) || 0,
+          maxScore: parseInt($element.find('.max-score').text()) || 0,
           attachments,
-          platform
+          platform,
+          timestamp: new Date(),
+          campus
         };
       }).get();
     } catch (error) {
-      throw new ParseError('과제 파싱 실패');
+      throw new ParseError('과제 파싱 실패: ' + (error instanceof Error ? error.message : String(error)));
     }
   }
 
+  // 도서관 상태 파싱
+  parseLibraryStatus(html: string): LibraryResource {
+    try {
+      const $ = cheerio.load(html);
+      
+      const status = $('.room-status').map((_, element): LibraryStatus => {
+        const $status = $(element);
+        return {
+          id: $status.attr('data-id') || `status_${Date.now()}_${_}`,
+          type: $status.find('.room-type').text().trim(),
+          capacity: parseInt($status.find('.capacity').text()) || 0,
+          available: parseInt($status.find('.available').text()) || 0,
+          status: this.parseLibraryStatusType($status.find('.status').text().trim())
+        };
+      }).get();
+
+      const hours = $('.operation-hours').map((_, element): LibraryHours => {
+        const $hours = $(element);
+        return {
+          facility: $hours.find('.facility-name').text().trim(),
+          weekday: this.parseTimeRange($hours.find('.weekday').text().trim()),
+          weekend: this.parseTimeRange($hours.find('.weekend').text().trim()),
+          holiday: this.parseTimeRange($hours.find('.holiday').text().trim())
+        };
+      }).get();
+
+      const notices = this.parseNotices($('.library-notices').html() || '', 'library', '신촌');
+
+      return { status, hours, notices };
+    } catch (error) {
+      throw new ParseError('도서관 상태 파싱 실패: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  // 첨부파일 파싱
   private parseAttachments($: CheerioAPI, $container: cheerio.Cheerio<any>): AttachmentInfo[] {
-    return $container.find('.attachment-item').map((_: number, attachment: any): AttachmentInfo => {
+    return $container.find('.attachment-item').map((_, attachment): AttachmentInfo => {
       const $attachment = $(attachment);
-      const sizeText = $attachment.find('.attachment-size').text().trim();
       
       return {
-        id: $attachment.attr('data-id') || '',
+        id: $attachment.attr('data-id') || `attachment_${Date.now()}_${_}`,
         name: $attachment.find('.attachment-name').text().trim(),
         url: $attachment.find('.attachment-link').attr('href') || '',
-        size: parseFileSizeToBytes(sizeText),
-        type: $attachment.find('.attachment-type').text().trim()
+        type: $attachment.find('.attachment-type').text().trim() || this.guessFileType($attachment.find('.attachment-name').text().trim()),
+        size: this.parseFileSize($attachment.find('.attachment-size').text().trim())
       };
     }).get();
   }
 
-  private parseDescription($: CheerioAPI, $course: cheerio.Cheerio<any>): string {
-    let description = $course.find('.course-description').text().trim();
-    const objectives = $course.find('.course-objectives li').map((_, el) => 
-      $(el).text().trim()
-    ).get();
-
-    if (objectives.length) {
-      description += '\n\n강의 목표:\n' + objectives.map(obj => `- ${obj}`).join('\n');
-    }
-
-    const syllabus = $course.find('.course-syllabus').html();
-    if (syllabus) {
-      description += '\n\n강의계획서:\n' + cheerio.load(syllabus).text().trim();
-    }
-
-    return description;
-  }
-
-  private parseSchedule($: CheerioAPI, $course: cheerio.Cheerio<any>): string[] {
-    return $course.find('.schedule li').map((_, element): string => {
-      const $schedule = $(element);
-      const day = $schedule.find('.day').text().trim();
-      const time = $schedule.find('.time').text().trim();
-      const location = $schedule.find('.location').text().trim();
-      return `${day} ${time} (${location})`;
-    }).get();
-  }
-
+  // 과제 상태 파싱
   private parseAssignmentStatus(status: string): AssignmentStatus {
     status = status.toLowerCase();
     if (status.includes('제출완료') || status.includes('submitted')) {
@@ -163,5 +182,57 @@ export class AdaptiveParser {
       return 'graded';
     }
     return 'not_submitted';
+  }
+
+  // 도서관 상태 타입 파싱
+  private parseLibraryStatusType(status: string): 'open' | 'closed' | 'maintenance' {
+    status = status.toLowerCase();
+    if (status.includes('운영중') || status.includes('open')) return 'open';
+    if (status.includes('점검중') || status.includes('maintenance')) return 'maintenance';
+    return 'closed';
+  }
+
+  // 시간 범위 파싱
+  private parseTimeRange(timeString: string): TimeRange {
+    const [open = '', close = ''] = timeString.split('~').map(t => t.trim());
+    return { open, close };
+  }
+
+  // 파일 크기 파싱
+  private parseFileSize(sizeString: string): number {
+    const match = sizeString.match(/^([\d.]+)\s*(KB|MB|GB|B)?$/i);
+    if (!match) return 0;
+
+    const [, size, unit = 'B'] = match;
+    const multipliers = {
+      B: 1,
+      KB: 1024,
+      MB: 1024 * 1024,
+      GB: 1024 * 1024 * 1024
+    };
+
+    return Math.round(parseFloat(size) * multipliers[unit.toUpperCase() as keyof typeof multipliers]);
+  }
+
+  // 파일 타입 추측
+  private guessFileType(filename: string): string {
+    const extension = filename.split('.').pop()?.toLowerCase() || '';
+    const mimeTypes: Record<string, string> = {
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      zip: 'application/zip',
+      txt: 'text/plain'
+    };
+
+    return mimeTypes[extension] || 'application/octet-stream';
   }
 }

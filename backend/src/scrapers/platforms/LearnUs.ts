@@ -3,25 +3,30 @@
 import axios, { AxiosInstance } from 'axios';
 import * as cheerio from 'cheerio';
 import { 
-  CourseInfo, 
-  NoticeInfo, 
-  AssignmentInfo,
+  ScrapedData,
   ScrapingResult,
-  ScrapingOptions,
-  ScrapingConfig   
+  ScrapingConfig,
+  AuthCredentials,
+  CourseInfo,
+  NoticeInfo,
+  AssignmentInfo,
+  Platform
 } from '../../types/backendInterfaces';
-import { PlatformCredentials, CoursePlatform } from '../../types/scraping/platforms';
 import { NetworkError, ParseError, AuthenticationError } from '../../errors/ScrapingError';
 import { getErrorMessage } from '../../utils/typeGuards';
 import { ContentExplorer } from '../components/ContentExplorer';
 import { AdaptiveParser } from '../components/AdaptiveParser';
 import { URLManager } from '../components/URLManager';
 import { CacheManager } from '../components/CacheManager';
-
-export class LearnUs implements CoursePlatform {
+interface CacheKeyData {
+  category: string;
+  campus: string;
+  timestamp: number;
+}
+export class LearnUs {
   private readonly baseUrl: string = 'https://learnus.yonsei.ac.kr';
   private axiosInstance: AxiosInstance;
-  private isAuthenticated: boolean = false;
+  private authenticated: boolean = false;
   
   constructor(
     private readonly contentExplorer: ContentExplorer,
@@ -40,21 +45,8 @@ export class LearnUs implements CoursePlatform {
       withCredentials: true
     });
   }
-  async getScrapeData(url: string, config: ScrapingConfig): Promise<ScrapingResult<ScrapedData>> {
-    try {
-      const response = await this.contentExplorer.fetchPage(url);
-      const data = this.adaptiveParser.parsePage(response.data);
-      return {
-        success: true,
-        data,
-        timestamp: new Date(),
-        source: this.constructor.name
-      };
-    } catch (error) {
-      throw error;
-    }
-  }
-  async authenticate(credentials: PlatformCredentials): Promise<boolean> {
+
+  public async authenticate(credentials: AuthCredentials): Promise<boolean> {
     try {
       const loginPage = await this.axiosInstance.get('/login');
       const $ = cheerio.load(loginPage.data);
@@ -70,120 +62,137 @@ export class LearnUs implements CoursePlatform {
         }
       });
 
-      this.isAuthenticated = response.data.includes('로그아웃');
-      return this.isAuthenticated;
+      this.authenticated = response.data.includes('로그아웃');
+      return this.authenticated;
     } catch (error) {
-      throw new AuthenticationError(`러너스 로그인 실패: ${getErrorMessage(error)}`);
+      throw new AuthenticationError(
+        `러너스 로그인 실패: ${getErrorMessage(error)}`,
+        'learnus'
+      );
     }
   }
 
-  async getCourses(options?: ScrapingOptions): Promise<ScrapingResult<CourseInfo[]>> {
+  public async getScrapeData(category: string, config: ScrapingConfig): Promise<ScrapingResult<ScrapedData>> {
+    if (!this.authenticated) {
+      throw new AuthenticationError('인증이 필요합니다', 'learnus');
+    }
+
     try {
-      if (!this.isAuthenticated) {
-        throw new AuthenticationError('인증이 필요합니다');
+
+      const cacheKey = `learnus_${category}_${config.campus || '신촌'}`;
+      
+      // 캐시 확인 - 결과가 ScrapedData인지 확인
+      const cachedData = this.cacheManager.get<ScrapedData>(cacheKey);
+      if (cachedData) {
+        return {
+          success: true,
+          data: cachedData,
+          timestamp: new Date(),
+          source: 'learnus',
+          metadata: {
+            campus: config.campus,
+            updateFrequency: '5m',
+            reliability: 0.95
+          }
+        };
       }
 
-      const response = await this.axiosInstance.get('/my/');
-      const courses = this.adaptiveParser.parseCourseList(response.data, 'learnus');
+      let data: any;
+      switch (category) {
+        case 'course':
+          data = await this.getCourses(config);
+          break;
+        case 'notice':
+          data = await this.getCourseNotices(config);
+          break;
+        case 'assignment':
+          data = await this.getAssignments(config);
+          break;
+        default:
+          throw new Error(`Unsupported category: ${category}`);
+      }
 
-      return {
+      const scrapedData = this.convertToScrapedData(data, category);
+
+      const result: ScrapingResult<ScrapedData> = {
         success: true,
-        data: courses,
+        data: scrapedData,
         timestamp: new Date(),
-        source: 'LearnUs'
+        source: 'learnus',
+        metadata: {
+          campus: config.campus,
+          updateFrequency: '5m',
+          reliability: 0.95
+        }
       };
+
+      // 결과 캐싱
+      this.cacheManager.set(cacheKey, scrapedData);
+
+      return result;
     } catch (error) {
-      throw this.handleError(error, '강좌 목록 가져오기 실패');
-    }
+      throw this.handleError(error, `Failed to scrape ${category}`);
+  }
+}
+
+  private convertToScrapedData(data: any, category: string): ScrapedData {
+    return {
+      id: `learnus_${Date.now()}`,
+      type: category,
+      content: data,
+      timestamp: new Date(),
+      metadata: {
+        source: 'learnus',
+        category: category,
+        confidence: 1.0
+      }
+    };
   }
 
-  async getCourseDetails(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<CourseInfo>> {
-    try {
-      if (!this.isAuthenticated) {
-        throw new AuthenticationError('인증이 필요합니다');
-      }
-
-      const response = await this.axiosInstance.get(`/course/view.php?id=${courseId}`);
-      const course = this.adaptiveParser.parseCourseDetails(response.data, 'learnus');
-
-      return {
-        success: true,
-        data: course,
-        timestamp: new Date(),
-        source: 'LearnUs'
-      };
-    } catch (error) {
-      throw this.handleError(error, '강좌 상세 정보 가져오기 실패');
-    }
+  private async getCourses(config: ScrapingConfig): Promise<CourseInfo[]> {
+    const response = await this.axiosInstance.get('/my/');
+    return this.adaptiveParser.parseCourseList(response.data, 'learnus', config.campus || '신촌');
   }
 
-  async getAssignments(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<AssignmentInfo[]>> {
-    try {
-      if (!this.isAuthenticated) {
-        throw new AuthenticationError('인증이 필요합니다');
-      }
-
-      const response = await this.axiosInstance.get(`/mod/assign/index.php?id=${courseId}`);
-      const assignments = this.adaptiveParser.parseAssignments(response.data, 'learnus');
-
-      return {
-        success: true,
-        data: assignments,
-        timestamp: new Date(),
-        source: 'LearnUs'
-      };
-    } catch (error) {
-      throw this.handleError(error, '과제 목록 가져오기 실패');
-    }
+  private async getCourseNotices(config: ScrapingConfig): Promise<NoticeInfo[]> {
+    const response = await this.axiosInstance.get('/notices');
+    return this.adaptiveParser.parseNotices(response.data, 'learnus', config.campus || '신촌');
   }
 
-  async scrapeCourseNotices(courseId: string, options?: ScrapingOptions): Promise<ScrapingResult<NoticeInfo[]>> {
-    try {
-      if (!this.isAuthenticated) {
-        throw new AuthenticationError('인증이 필요합니다');
-      }
-
-      const response = await this.axiosInstance.get(`/course/notices.php?id=${courseId}`);
-      const notices = this.adaptiveParser.parseNotices(response.data, 'learnus');
-
-      return {
-        success: true,
-        data: notices,
-        timestamp: new Date(),
-        source: 'LearnUs'
-      };
-    } catch (error) {
-      throw this.handleError(error, '공지사항 가져오기 실패');
-    }
+  private async getAssignments(config: ScrapingConfig): Promise<AssignmentInfo[]> {
+    const response = await this.axiosInstance.get('/assignments');
+    return this.adaptiveParser.parseAssignments(response.data, 'learnus', config.campus || '신촌');
   }
 
   private handleError(error: unknown, message: string): Error {
     if (error instanceof AuthenticationError) {
-      throw error;
+      return error;
     }
     if (axios.isAxiosError(error)) {
-      throw new NetworkError(
+      return new NetworkError(
         `${message}: ${error.message}`,
-        'request',
-        error.response?.headers['retry-after'] ? 
-          parseInt(error.response.headers['retry-after']) : undefined,
-        error.response?.status
+        {
+          type: 'connection',
+          statusCode: error.response?.status,
+          retryAfter: error.response?.headers['retry-after'] ? 
+            parseInt(error.response.headers['retry-after']) : undefined
+        }
       );
     }
-    throw new ParseError(`${message}: ${getErrorMessage(error)}`);
+    return new ParseError(`${message}: ${getErrorMessage(error)}`);
   }
 
-  isLoggedIn(): boolean {
-    return this.isAuthenticated;
-  }
-
-  async logout(): Promise<void> {
+  public async logout(): Promise<void> {
     try {
       await this.axiosInstance.get('/login/logout.php');
-      this.isAuthenticated = false;
+      this.authenticated = false;
     } catch (error) {
       // 로그아웃 실패는 조용히 처리
-      this.isAuthenticated = false;
+      this.authenticated = false;
     }
+  }
+
+  public getAuthStatus(): boolean {
+    return this.authenticated;
   }
 }

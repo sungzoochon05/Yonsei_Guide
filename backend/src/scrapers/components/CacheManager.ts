@@ -9,7 +9,7 @@ interface CacheEntry<T> {
 }
 
 export class CacheManager {
-  private cache: Map<string, CacheEntry<any>> = new Map();
+  private cache: Map<string, any> = new Map();
   private readonly defaultExpiryMinutes: number;
   private readonly maxSize: number;
   private readonly cleanupInterval: NodeJS.Timeout;
@@ -27,45 +27,12 @@ export class CacheManager {
     }, cleanupIntervalMinutes * 60 * 1000);
   }
 
-  set<T>(
-    key: string,
-    data: T,
-    expiryMinutes: number = this.defaultExpiryMinutes
-  ): void {
-    if (this.cache.size >= this.maxSize) {
-      const oldestKey = Array.from(this.cache.entries())
-        .sort(([, a], [, b]) => a.timestamp.getTime() - b.timestamp.getTime())[0][0];
-      this.cache.delete(oldestKey);
-    }
-
-    const now = new Date();
-    const expiry = new Date(now.getTime() + expiryMinutes * 60 * 1000);
-    
-    this.cache.set(key, {
-      data,
-      timestamp: now,
-      expiry
-    });
+  set<T>(key: string, value: T): void {
+    this.cache.set(key, value);
   }
 
-  get<T>(key: string): ScrapingResult<T> | null {
-    const entry = this.cache.get(key);
-    
-    if (!entry) {
-      return null;
-    }
-
-    if (entry.expiry < new Date()) {
-      this.cache.delete(key);
-      return null;
-    }
-
-    return {
-      success: true,
-      data: entry.data,
-      timestamp: entry.timestamp,
-      source: 'cache'
-    };
+  get<T>(key: string): T | null {
+    return this.cache.get(key) || null;
   }
 
   has(key: string): boolean {

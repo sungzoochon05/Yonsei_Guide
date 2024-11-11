@@ -21,38 +21,20 @@ export class ScrapingError extends Error {
     };
   }
 }
-
-export class NetworkError extends ScrapingError {
-  readonly retryAfter: number;
-  readonly statusCode?: number;
-
+export interface NetworkErrorOptions {
+  type: 'timeout' | 'rateLimit' | 'connection' | 'unknown';
+  retryAfter?: number;
+  statusCode?: number;
+  details?: Record<string, any>;
+}
+export class NetworkError extends Error {
   constructor(
     message: string,
-    type: string,
-    retryAfter: number = 0,
-    statusCode?: number,
-    details?: Record<string, any>
+    public readonly options: NetworkErrorOptions
   ) {
-    super(message, `network.${type}`, details);
+    super(message);
     this.name = 'NetworkError';
-    this.retryAfter = retryAfter;
-    this.statusCode = statusCode;
-  }
-
-  static createTimeout(message: string = 'Request timed out'): NetworkError {
-    return new NetworkError(message, 'timeout', 5000);
-  }
-
-  static createRateLimit(retryAfter: number): NetworkError {
-    return new NetworkError(
-      `Rate limit exceeded. Try again after ${retryAfter} seconds`,
-      'rateLimit',
-      retryAfter * 1000
-    );
-  }
-
-  isRetryable(): boolean {
-    return ['timeout', 'connection', 'rateLimit'].includes(this.type);
+    Object.setPrototypeOf(this, NetworkError.prototype);
   }
 }
 
