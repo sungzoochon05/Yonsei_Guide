@@ -276,18 +276,18 @@ export class BackendOpenAIService {
     );
 
     const contentTokens = new Set(
-      item.content.toLowerCase().split(/\s+/).filter(token => token.length > 1)
+      item.content.toLowerCase().split(/\s+/).filter((token: string) => token.length > 1)
     );
 
     let score = 0;
     
     // 제목 매칭 점수 (가중치 2)
-    messageTokens.forEach(token => {
+    messageTokens.forEach((token: string) => {
       if (titleTokens.has(token)) score += 2;
     });
 
     // 내용 매칭 점수 (가중치 1)
-    messageTokens.forEach(token => {
+    messageTokens.forEach((token: string) => {
       if (contentTokens.has(token)) score += 1;
     });
 
