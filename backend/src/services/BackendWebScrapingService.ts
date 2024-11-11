@@ -22,16 +22,24 @@ import {
   private scraping: Map<string, Promise<ScrapedData[] | LibraryResource>>;
  
   private constructor() {
+    // axios 인스턴스 생성
+    const axiosInstance = axios.create({
+      timeout: 5000,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
     // 공통으로 사용될 컴포넌트들 초기화
-    const contentExplorer = new ContentExplorer();
-    const cacheManager = new CacheManager();
+    const contentExplorer = new ContentExplorer(axiosInstance);
+    const cacheManager = new CacheManager(60); // 60분 캐시
     const adaptiveParser = new AdaptiveParser();
-    const urlManager = new URLManager();
- 
+    const urlManager = new URLManager('https://yonsei.ac.kr');
+
     this.scrapingService = this.initializeScrapingService(
       contentExplorer,
-      cacheManager,
-      adaptiveParser,
+      adaptiveParser, // 순서 변경: adaptiveParser를 두 번째 인자로
+      cacheManager,   // cacheManager를 세 번째 인자로
       urlManager
     );
     this.scraping = new Map();
@@ -52,59 +60,59 @@ import {
    */
   private initializeScrapingService(
     contentExplorer: ContentExplorer,
-    cacheManager: CacheManager,
     adaptiveParser: AdaptiveParser,
+    cacheManager: CacheManager,
     urlManager: URLManager
   ): ScrapingService {
     const learnUsService = new LearnUs(
       contentExplorer,
-      cacheManager,
       adaptiveParser,
+      cacheManager,
       urlManager
     );
     const portalService = new YonseiPortal(
       contentExplorer,
-      cacheManager,
       adaptiveParser,
+      cacheManager,
       urlManager
     );
     const libraryService = new LibrarySystem(
       contentExplorer,
-      cacheManager,
       adaptiveParser,
+      cacheManager,
       urlManager
     );
  
     return {
       async scrape(url: string, config: ScrapingConfig): Promise<ScrapedData> {
-        const { campus, platform, target } = config;
+        const category = config.category || 'general';
         
-        switch(target) {
+        switch(category) {
           case 'learnus':
           case 'course':
           case 'assignment':
           case 'notice':
-            return learnUsService.getContent(url, config);
+            return learnUsService.scrapeContent(url, config);
             
           case 'portal':
           case 'academic':
           case 'scholarship':
           case 'career':
-            return portalService.getContent(url, config);
+            return portalService.scrapeContent(url, config);
             
           case 'library':
           case 'books':
           case 'studyroom':
           case 'facilities':
-            return libraryService.getContent(url, config);
+            return libraryService.scrapeContent(url, config);
             
           default:
-            throw new Error(`Unknown target: ${target}`);
+            throw new Error(`Unknown category: ${category}`);
         }
       },
  
       async getLibraryStatus(): Promise<LibraryResource> {
-        return libraryService.getStatus();
+        return libraryService.getLibraryStatus();
       }
     };
   }
@@ -119,9 +127,8 @@ import {
     const { campus = '신촌', count = 20 } = options;
     const config: ScrapingConfig = {
       campus,
-      platform: this.getPlatformForCategory(category),
-      target: category,
-      maxCount: count
+      category,
+      maxResults: count
     };
   
     try {
