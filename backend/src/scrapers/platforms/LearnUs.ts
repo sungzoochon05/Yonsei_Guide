@@ -7,7 +7,8 @@ import {
   NoticeInfo, 
   AssignmentInfo,
   ScrapingResult,
-  ScrapingOptions 
+  ScrapingOptions,
+  ScrapingConfig   
 } from '../../types/backendInterfaces';
 import { PlatformCredentials, CoursePlatform } from '../../types/scraping/platforms';
 import { NetworkError, ParseError, AuthenticationError } from '../../errors/ScrapingError';
@@ -39,7 +40,20 @@ export class LearnUs implements CoursePlatform {
       withCredentials: true
     });
   }
-
+  async getScrapeData(url: string, config: ScrapingConfig): Promise<ScrapingResult<ScrapedData>> {
+    try {
+      const response = await this.contentExplorer.fetchPage(url);
+      const data = this.adaptiveParser.parsePage(response.data);
+      return {
+        success: true,
+        data,
+        timestamp: new Date(),
+        source: this.constructor.name
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
   async authenticate(credentials: PlatformCredentials): Promise<boolean> {
     try {
       const loginPage = await this.axiosInstance.get('/login');

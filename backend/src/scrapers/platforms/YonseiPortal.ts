@@ -8,7 +8,8 @@ import {
   NoticeInfo, 
   AssignmentInfo,
   ScrapingResult,
-  ScrapingOptions 
+  ScrapingOptions,
+  ScrapingConfig    
 } from '../../types/backendInterfaces';
 import { 
   NetworkError, 
@@ -196,7 +197,20 @@ export class YonseiPortal implements CoursePlatform {
       throw new ParseError(`강좌 공지사항 파싱 실패: ${getErrorMessage(error)}`);
     }
   }
-
+  async getScrapeData(url: string, config: ScrapingConfig): Promise<ScrapingResult<ScrapedData>> {
+    try {
+      const response = await this.contentExplorer.fetchPage(url);
+      const data = this.adaptiveParser.parsePage(response.data);
+      return {
+        success: true,
+        data,
+        timestamp: new Date(),
+        source: this.constructor.name
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
   async getAssignments(courseId: string): Promise<ScrapingResult<AssignmentInfo[]>> {
     try {
       if (!this.isAuthenticated) {

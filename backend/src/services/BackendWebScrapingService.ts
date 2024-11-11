@@ -38,6 +38,27 @@ export class BackendWebScrapingService {
     const cacheManager = new CacheManager(60);
     const adaptiveParser = new AdaptiveParser();
 
+    this.learnUs = new LearnUs(
+      contentExplorer,
+      adaptiveParser,
+      learnUsUrlManager,  // CacheManager 대신 URLManager 전달
+      cacheManager
+    );
+    
+    this.portalService = new YonseiPortal(
+      contentExplorer,
+      adaptiveParser,
+      portalUrlManager,  // CacheManager 대신 URLManager 전달
+      cacheManager
+    );
+    
+    this.libraryService = new LibrarySystem(
+      contentExplorer,
+      adaptiveParser,
+      libraryUrlManager,  // CacheManager 대신 URLManager 전달
+      cacheManager
+    );
+    
     this.scrapingService = this.initializeScrapingService(
       contentExplorer,
       adaptiveParser,
@@ -117,18 +138,16 @@ export class BackendWebScrapingService {
     };
   }
 
-  private async scrapeByCategory(
+  public async scrapeByCategory(
     category: string,
     options: { campus?: '신촌' | '원주'; count?: number } = {}
-  ): Promise<ScrapedData[] | LibraryResource> {
-    const { campus = '신촌', count = 20 } = options;
-    const config: ScrapingConfig = {
-      campus,
-      type: category,
-      limit: count
-    };
-  
+  ): Promise<ScrapingResult<ScrapedData[]>> {
     try {
+      const config: ScrapingConfig = {
+        campus: options.campus || '신촌',
+        limit: options.count || 20
+      };
+  
       const result = await this.scrapingService.scrape(category, config);
       return Array.isArray(result) ? result : [result];
     } catch (error) {

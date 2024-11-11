@@ -9,6 +9,8 @@ export interface ScrapingConfig {
   timeout?: number;
   retryCount?: number;
   campus?: '신촌' | '원주';
+  type?: string;  // 추가
+  limit?: number; // 추가
   auth?: {
     required: boolean;
     type: 'cookie' | 'token' | 'basic';

@@ -6,7 +6,8 @@ import type { CheerioAPI } from 'cheerio';
 import {
   RoomInfo,
   ScrapingResult,
-  ScrapingOptions,
+  ScrapingOptions, // 추가
+  ScrapingConfig,   // 추가
   RoomSchedule
 } from '../../types/backendInterfaces';
 import {
@@ -66,7 +67,30 @@ export class LibrarySystem implements LibraryPlatform {
       withCredentials: true
     });
   }
-
+  async getLibraryResourceStatus(): Promise<LibraryResource> {
+    try {
+      const url = this.urlManager.getFullUrl('/status');
+      const response = await this.contentExplorer.fetchPage(url);
+      const data = this.adaptiveParser.parseLibraryStatus(response.data);
+      return data;
+    } catch (error) {
+      throw error;
+    }
+  }
+  async getScrapeData(url: string, config: ScrapingConfig): Promise<ScrapingResult<ScrapedData>> {
+    try {
+      const response = await this.contentExplorer.fetchPage(url);
+      const data = this.adaptiveParser.parsePage(response.data);
+      return {
+        success: true,
+        data,
+        timestamp: new Date(),
+        source: this.constructor.name
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
   async authenticate(credentials: LibrarySystemCredentials): Promise<boolean> {
     try {
       const loginPage = await this.axiosInstance.get('/login');
